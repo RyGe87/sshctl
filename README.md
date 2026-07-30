@@ -128,9 +128,9 @@ at the error message.
 Prebuilt binaries are on the
 [releases page](https://github.com/RyGe87/sshctl/releases): macOS (universal,
 with a ready-made `sshctl.app`), Linux (x86_64) and Windows (x86_64), each
-archive holding both the CLI and the GUI. macOS quarantines downloaded
-programs: open the app the first time via right-click > Open, or
-`xattr -d com.apple.quarantine sshctl.app`.
+archive holding both the CLI and the GUI. The macOS app and binaries are
+signed with a Developer ID and notarized by Apple, so they open like any
+other program.
 
 With Rust installed there is also
 `cargo install --git https://github.com/RyGe87/sshctl`, which builds both
