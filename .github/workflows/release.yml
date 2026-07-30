@@ -13,6 +13,10 @@ env:
 jobs:
   macos:
     runs-on: macos-latest
+    env:
+      # Signing needs the secrets below; without them the ad-hoc signature
+      # from bundle-app.sh stands and the build still succeeds.
+      HAVE_SIGNING: ${{ secrets.APPLE_CERTIFICATE != '' }}
     steps:
       - uses: actions/checkout@v4
       - run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
@@ -28,6 +32,47 @@ jobs:
             target/aarch64-apple-darwin/release/sshctl-gui \
             target/x86_64-apple-darwin/release/sshctl-gui
           BIN=dist/sshctl-gui ./bundle-app.sh
+      - name: sign and notarize
+        if: env.HAVE_SIGNING == 'true'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
+        run: |
+          # A throwaway keychain holds the Developer ID identity for the
+          # length of this job.
+          KC=build.keychain
+          KCPW=$(uuidgen)
+          security create-keychain -p "$KCPW" "$KC"
+          security set-keychain-settings -lut 21600 "$KC"
+          security unlock-keychain -p "$KCPW" "$KC"
+          printf '%s' "$APPLE_CERTIFICATE" | base64 -d > cert.p12
+          security import cert.p12 -k "$KC" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          rm cert.p12
+          security set-key-partition-list -S 'apple-tool:,apple:,codesign:' -s -k "$KCPW" "$KC" >/dev/null
+          security list-keychains -d user -s "$KC" login.keychain
+          IDENT=$(security find-identity -v -p codesigning "$KC" \
+            | grep -om1 '"Developer ID Application: [^"]*"' | tr -d '"')
+          echo "signing as $IDENT"
+          codesign --force --options runtime --timestamp --keychain "$KC" \
+            --sign "$IDENT" dist/sshctl dist/sshctl-gui
+          codesign --force --options runtime --timestamp --keychain "$KC" \
+            --sign "$IDENT" target/sshctl.app
+          # Notarize the app and the bare binaries; staple the app so the
+          # approval also holds offline (bare Mach-O files cannot be stapled).
+          ditto -c -k --keepParent target/sshctl.app app-submit.zip
+          zip -j bins-submit.zip dist/sshctl dist/sshctl-gui
+          xcrun notarytool submit app-submit.zip --wait \
+            --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$NOTARY_PASSWORD"
+          xcrun notarytool submit bins-submit.zip --wait \
+            --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$NOTARY_PASSWORD"
+          xcrun stapler staple target/sshctl.app
+          # Gatekeeper's own verdict gates the release: no pass, no assets.
+          spctl -a -vv target/sshctl.app
+      - name: package
+        run: |
           ditto -c -k --keepParent target/sshctl.app sshctl-macos-app.zip
           tar -C dist -czf sshctl-macos-universal.tar.gz sshctl sshctl-gui
       - uses: actions/upload-artifact@v4
@@ -76,6 +121,8 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
+          # A tag with a dash (v0.2.0-rc.1) is a trial run, not a release.
+          prerelease: ${{ contains(github.ref_name, '-') }}
           files: |
             *.tar.gz
             *.zip
