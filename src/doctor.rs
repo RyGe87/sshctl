@@ -11,7 +11,6 @@
 use crate::model::{Host, Source, ssh_dir};
 use std::io::ErrorKind;
 use std::net::{TcpStream, ToSocketAddrs};
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
@@ -97,9 +96,14 @@ pub fn run_streaming(
         ));
     }
 
-    // Ask once which known_hosts files apply; every hop of a jump chain gets
-    // held against them in a moment.
-    let known_files = crate::known::files_for_all(source);
+    // Ask once which known_hosts files apply; every hop of a jump chain and
+    // the ledger check further down both use this list. Offline nobody does,
+    // and finding it costs one `ssh -G` per host.
+    let known_files = if opts.offline {
+        Vec::new()
+    } else {
+        crate::known::files_for_all(source)
+    };
 
     for host in &source.hosts {
         if let Some(only) = &opts.only
@@ -130,7 +134,7 @@ pub fn run_streaming(
         emit(finding);
     }
     if !opts.offline {
-        for finding in check_known_hosts(source, opts) {
+        for finding in check_known_hosts(source, opts, &known_files) {
             emit(finding);
         }
     }
@@ -265,45 +269,22 @@ fn check_host(host: &Host, opts: &Options, known_files: &[std::path::PathBuf]) -
 
     // If a route runs through a jump host, then the final destination is by
     // definition not directly reachable — that is the very reason to use
-    // ProxyJump. Skip layer 2; layer 3 goes via the alias and therefore does
+    // ProxyJump. The same goes for a ProxyCommand, whatever it runs: testing
+    // the port directly reported exactly the hosts that need a detour as
+    // broken. Skip layer 2; layer 3 goes via the alias and therefore does
     // follow the route.
-    if !chain.is_empty() {
+    let has_proxy_command = host.options.iter().any(|o| {
+        let lower = o.to_ascii_lowercase();
+        // `ProxyCommand none` explicitly means: no detour after all.
+        lower.starts_with("proxycommand") && lower.split_whitespace().nth(1) != Some("none")
+    });
+    if !chain.is_empty() || has_proxy_command {
         return layer_three(host, opts, out, true);
     }
 
     // Layer 2: the network.
-    let target = (host.hostname.as_str(), host.port_or_default());
-    let addrs: Vec<_> = match target.to_socket_addrs() {
-        Ok(a) => a.collect(),
-        Err(_) => {
-            out.push(Finding::new(
-                Level::Fail,
-                &subject,
-                format!("hostname '{}' does not resolve", host.hostname),
-            ));
-            return out;
-        }
-    };
-    let Some(addr) = addrs.first() else {
-        out.push(Finding::new(
-            Level::Fail,
-            &subject,
-            format!("hostname '{}' yields no address", host.hostname),
-        ));
-        return out;
-    };
-
-    if let Err(e) = TcpStream::connect_timeout(addr, opts.connect_timeout) {
-        let reason = match e.kind() {
-            ErrorKind::TimedOut => "no answer (timed out)".to_string(),
-            ErrorKind::ConnectionRefused => "connection refused".to_string(),
-            _ => e.to_string(),
-        };
-        out.push(Finding::new(
-            Level::Fail,
-            &subject,
-            format!("{} port {} — {reason}", addr.ip(), host.port_or_default()),
-        ));
+    if let Err(reason) = reachable(&host.hostname, host.port_or_default(), opts.connect_timeout) {
+        out.push(Finding::new(Level::Fail, &subject, reason));
         return out;
     }
 
@@ -342,6 +323,11 @@ fn layer_three(
             "host key not trusted yet — look at the fingerprint and add it \
              deliberately; this check will not do that for you",
         )),
+        Ok(Login::Unclear(said)) => out.push(Finding::new(
+            Level::Warn,
+            &subject,
+            format!("could not tell whether the login works — ssh said: {said}"),
+        )),
         Err(e) => out.push(Finding::new(
             Level::Warn,
             &subject,
@@ -362,6 +348,11 @@ pub enum Login {
     /// The host key is unknown. Deliberately not an outcome in which we accept
     /// it: a check that signs for trust itself is no longer a check.
     UnknownHost,
+    /// ssh failed and the message matches nothing we know. Deliberately not
+    /// counted as accepted: "Connection closed by ..." is fail2ban or
+    /// MaxStartups, not a working key. Carries what ssh said, so the finding
+    /// can show it.
+    Unclear(String),
 }
 
 /// Tells "key refused" apart from "command failed". That is not nitpicking: on
@@ -382,14 +373,29 @@ pub fn classify_login(success: bool, stderr: &str) -> Login {
     {
         return Login::UnknownHost;
     }
-    let denied = lower.contains("permission denied")
+    if lower.contains("permission denied")
         || lower.contains("too many authentication failures")
-        || lower.contains("no supported authentication methods");
-    if denied {
-        Login::Denied
-    } else {
-        Login::AcceptedNoShell
+        || lower.contains("no supported authentication methods")
+    {
+        return Login::Denied;
     }
+    // Only an explicit sign of success counts as "authenticated, no shell".
+    // The old fallback *assumed* it — and then a usage error, or a
+    // "Connection closed by ..." from fail2ban, came out as "key is accepted"
+    // without ssh ever having been past the front door.
+    if lower.contains("successfully authenticated")
+        || lower.contains("does not provide shell access")
+        || lower.contains("shell access is disabled")
+    {
+        return Login::AcceptedNoShell;
+    }
+    let said = stderr
+        .lines()
+        .map(str::trim)
+        .rfind(|l| !l.is_empty())
+        .unwrap_or("no output")
+        .to_string();
+    Login::Unclear(said)
 }
 
 /// We test with explicit flags instead of via the alias, so that the outcome
@@ -432,7 +438,7 @@ fn try_login(host: &Host, opts: &Options, via_route: bool) -> Result<Login, Stri
         ])
         .arg("-p")
         .arg(host.port_or_default().to_string())
-        .arg(format!("{}@{}", host.user, host.hostname))
+        .arg(destination(host))
         .arg("true")
         .output()
         .map_err(|e| e.to_string())?;
@@ -440,6 +446,19 @@ fn try_login(host: &Host, opts: &Options, via_route: bool) -> Result<Login, Stri
         out.status.success(),
         &String::from_utf8_lossy(&out.stderr),
     ))
+}
+
+/// `user@host`, or just the host when no User is set — ssh then takes the
+/// local username, which is exactly what a block without a User means.
+/// `@host` with the user simply missing is not the same thing: ssh rejects
+/// that before it even connects, and the old fallback in [`classify_login`]
+/// then read the usage error as "key is accepted".
+fn destination(host: &Host) -> String {
+    if host.user.is_empty() {
+        host.hostname.clone()
+    } else {
+        format!("{}@{}", host.user, host.hostname)
+    }
 }
 
 /// Where does a hop really point, and under which name is the trust looked up?
@@ -468,28 +487,38 @@ fn resolve_hop(hop: &crate::proxy::Hop) -> (String, u16) {
     (name, port.unwrap_or(22))
 }
 
-/// Resolves a name and checks whether the port answers. On failure it returns
-/// a sentence saying *what* went wrong.
+/// Resolves a name and checks whether the port answers. Every resolved
+/// address gets a turn, the way ssh itself connects: a host that resolves
+/// IPv6-first but only answers over IPv4 is reachable, not broken. On failure
+/// it returns a sentence saying *what* went wrong, about the last address
+/// tried.
 fn reachable(hostname: &str, port: u16, timeout: Duration) -> Result<(), String> {
     let addrs: Vec<_> = match (hostname, port).to_socket_addrs() {
         Ok(a) => a.collect(),
         Err(_) => return Err(format!("name '{hostname}' does not resolve")),
     };
-    let Some(addr) = addrs.first() else {
+    if addrs.is_empty() {
         return Err(format!("name '{hostname}' yields no address"));
-    };
-    match TcpStream::connect_timeout(addr, timeout) {
-        Ok(_) => Ok(()),
-        Err(e) => Err(match e.kind() {
-            ErrorKind::TimedOut => format!("{} port {port} gives no answer", addr.ip()),
-            ErrorKind::ConnectionRefused => format!("{} refuses port {port}", addr.ip()),
-            _ => e.to_string(),
-        }),
     }
+    let mut reason = String::new();
+    for addr in &addrs {
+        match TcpStream::connect_timeout(addr, timeout) {
+            Ok(_) => return Ok(()),
+            Err(e) => {
+                reason = match e.kind() {
+                    ErrorKind::TimedOut => format!("{} port {port} gives no answer", addr.ip()),
+                    ErrorKind::ConnectionRefused => format!("{} refuses port {port}", addr.ip()),
+                    _ => e.to_string(),
+                }
+            }
+        }
+    }
+    Err(reason)
 }
 
 fn check_key_permissions(path: &Path, subject: &str) -> Option<Finding> {
-    let mode = std::fs::metadata(path).ok()?.permissions().mode() & 0o777;
+    // `None` on Windows: there are no Unix modes there to judge.
+    let mode = crate::model::mode_of(path)?;
     if mode & 0o077 != 0 {
         return Some(Finding::new(
             Level::Fail,
@@ -547,16 +576,21 @@ fn check_orphan_keys(source: &Source) -> Vec<Finding> {
 /// Lays the ledger next to your config. `config` says where you want to go,
 /// `known_hosts` says which machines you have ever recognised — and those two
 /// drift apart without anything saying so.
-fn check_known_hosts(source: &Source, opts: &Options) -> Vec<Finding> {
+fn check_known_hosts(
+    source: &Source,
+    opts: &Options,
+    files: &[std::path::PathBuf],
+) -> Vec<Finding> {
     let mut out = Vec::new();
 
-    // Which files apply? Ask ssh, never guess a path yourself: next to
-    // known_hosts there is often a known_hosts.old with revoked keys.
-    let files = crate::known::files_for_all(source);
+    // The files come from the caller, who asked ssh — never guess a path
+    // yourself: next to known_hosts there is often a known_hosts.old with
+    // revoked keys. And asking costs one `ssh -G` per host, so it happens
+    // once per run, not once per check.
     if files.is_empty() {
         return out;
     }
-    let ledger = crate::known::Ledger::load(&files);
+    let ledger = crate::known::Ledger::load(files);
 
     // 1. Hosts you have never recognised.
     let mut claimed: Vec<String> = Vec::new();
@@ -566,7 +600,7 @@ fn check_known_hosts(source: &Source, opts: &Options) -> Vec<Finding> {
         {
             continue;
         }
-        let hits = crate::known::lookup(&host.hostname, host.port_or_default(), &files);
+        let hits = crate::known::lookup(&host.hostname, host.port_or_default(), files);
         if hits.is_empty() {
             out.push(Finding::new(
                 Level::Warn,
@@ -790,15 +824,14 @@ fn check_hygiene() -> Vec<Finding> {
     let dir = ssh_dir();
     let mut out = Vec::new();
 
-    if let Ok(meta) = std::fs::metadata(&dir) {
-        let mode = meta.permissions().mode() & 0o777;
-        if mode & 0o077 != 0 {
-            out.push(Finding::new(
-                Level::Warn,
-                "hygiene",
-                format!("~/.ssh has permissions {mode:o}; 700 is the convention"),
-            ));
-        }
+    if let Some(mode) = crate::model::mode_of(&dir)
+        && mode & 0o077 != 0
+    {
+        out.push(Finding::new(
+            Level::Warn,
+            "hygiene",
+            format!("~/.ssh has permissions {mode:o}; 700 is the convention"),
+        ));
     }
 
     for (name, explanation) in [
@@ -935,6 +968,40 @@ mod tests {
     fn a_refused_key_is_a_real_failure() {
         let stderr = "root@192.0.2.10: Permission denied (publickey,password).";
         assert_eq!(classify_login(false, stderr), Login::Denied);
+    }
+
+    #[test]
+    fn an_unrecognised_error_is_not_reported_as_accepted() {
+        // fail2ban and MaxStartups close the connection before authentication;
+        // the old fallback read that as "key is accepted".
+        match classify_login(false, "Connection closed by 192.0.2.10 port 22\r\n") {
+            Login::Unclear(said) => assert!(said.contains("Connection closed"), "got {said}"),
+            other => panic!("must be unclear, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_usage_error_is_not_reported_as_accepted() {
+        // `ssh @host` (empty user) fails before connecting, with a usage
+        // message that matches no known pattern.
+        assert!(matches!(
+            classify_login(false, "usage: ssh [-46AaCfGgKkMNnqsTtVvXxYy] ..."),
+            Login::Unclear(_)
+        ));
+    }
+
+    #[test]
+    fn a_host_without_a_user_is_addressed_without_an_at_sign() {
+        // `@host` is not "empty user" to ssh but a usage error — and that
+        // error then came out of the classifier as "key is accepted".
+        use crate::model::Host;
+        let mut h = Host {
+            hostname: "alfa.example".into(),
+            ..Default::default()
+        };
+        assert_eq!(destination(&h), "alfa.example");
+        h.user = "root".into();
+        assert_eq!(destination(&h), "root@alfa.example");
     }
 
     #[test]

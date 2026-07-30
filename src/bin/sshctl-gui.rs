@@ -20,6 +20,7 @@ use sshctl::generate;
 use sshctl::keys::{self, KeyEntry};
 use sshctl::known;
 use sshctl::model::{self, Host, Source, ssh_config_path};
+use sshctl::parser;
 use sshctl::proof;
 use sshctl::proxy;
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -36,7 +37,11 @@ fn main() -> eframe::Result<()> {
             .with_title("sshctl"),
         ..Default::default()
     };
-    eframe::run_native("sshctl", options, Box::new(|_cc| Ok(Box::new(App::new()))))
+    eframe::run_native(
+        "sshctl",
+        options,
+        Box::new(|cc| Ok(Box::new(App::new(cc.egui_ctx.clone())))),
+    )
 }
 
 /// The four tabs. One to look at, three to change things in — that separation
@@ -66,6 +71,53 @@ enum Msg {
     Done,
 }
 
+/// One key from ssh-keyscan, with its fingerprint worked out **once**, when
+/// the scan lands — not in the draw loop, which used to start an ssh-keygen
+/// per key on every repaint.
+struct Scanned {
+    name: String,
+    kind: String,
+    /// The raw known_hosts line, ready to append.
+    line: String,
+    fingerprint: String,
+}
+
+/// What the background proof works out for the save screen.
+///
+/// Two separate questions, because they deserve different treatment on the
+/// screen. "Does the rewrite itself change anything?" is the safety gate: a
+/// difference there is a bug or a surprise, and blocks. "What do your own
+/// edits change?" is information you asked for by editing: it is shown, and
+/// one click writes it. One combined comparison could not tell the two
+/// apart, so every deliberate edit set off the same alarm as a rewrite bug —
+/// and an alarm that cries wolf on every save teaches the reflex of ticking
+/// the override, which costs more than any gate is worth.
+struct ProofOutcome {
+    /// The rewrite with your edits set aside: the on-disk text against the
+    /// tidied parse of that same text.
+    rewrite: proof::Verdict,
+    /// Your edits: the tidied on-disk text against what would be written.
+    /// `None` when there are none.
+    edits: Option<proof::Verdict>,
+}
+
+/// `ssh-keygen -l` over stdin, so the line never has to touch the disk.
+fn fingerprint_of(line: &str) -> String {
+    std::process::Command::new("ssh-keygen")
+        .args(["-l", "-f", "-"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .ok()
+        .and_then(|mut c| {
+            use std::io::Write;
+            c.stdin.as_mut()?.write_all(line.as_bytes()).ok()?;
+            let o = c.wait_with_output().ok()?;
+            Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
+        })
+        .unwrap_or_default()
+}
+
 enum Modal {
     None,
     /// Preview of what would go into ~/.ssh/config.
@@ -75,11 +127,17 @@ enum Modal {
         added: Vec<String>,
         /// Someone has changed the file since we opened it.
         disk_changed: bool,
-        /// What ssh itself says about the rewrite. This, and not the line
-        /// count, decides whether saving is allowed.
-        verdict: proof::Verdict,
+        /// What ssh itself says. `None` while the background thread is still
+        /// asking — the modal opens at once and says "checking" instead of
+        /// freezing the window for the length of the proof.
+        outcome: Option<ProofOutcome>,
         /// Comments that go away. Nothing breaks, but you should know.
         lost_comments: Vec<String>,
+        /// Round-trip losses against the file as it is on disk **now**. The
+        /// field on `App` describes the file at open time and goes stale with
+        /// every edit — a gate that looked at that one waved through the
+        /// deletion of an Include it should have stopped.
+        losses: Vec<Loss>,
     },
     AddHost,
     /// Sure you want to throw your changes away?
@@ -90,8 +148,12 @@ enum Modal {
     NewKey,
     /// Sure this key may go?
     ConfirmDeleteKey(String),
-    /// A freshly made key: show the public half so it can be authorised.
-    KeyMade(String),
+    /// A freshly made key: show the public half so it can be authorised. The
+    /// details ride along, worked out once — not per frame.
+    KeyMade {
+        name: String,
+        detail: Option<keys::KeyDetail>,
+    },
     /// Fetch a host key to add to known_hosts.
     ScanHost,
     /// Pick an extra ssh option from the catalog.
@@ -101,6 +163,9 @@ enum Modal {
 }
 
 struct App {
+    /// Handle to the window, kept so background threads can ask for a
+    /// repaint the moment their result is ready.
+    ctx: egui::Context,
     /// The text as it stood on disk when we opened it. Needed to see whether
     /// anything changed behind our back.
     original: String,
@@ -132,6 +197,13 @@ struct App {
     findings: Vec<Finding>,
     checking: bool,
     rx: Option<Receiver<Msg>>,
+    /// The proof for the save screen, under way on a thread. Dropped when the
+    /// modal closes, so a late answer cannot land in the wrong screen.
+    proof_rx: Option<Receiver<ProofOutcome>>,
+    /// The ledger being read on a thread: one `ssh -G` per host adds up, and
+    /// it used to hold the window shut on startup.
+    ledger_rx: Option<Receiver<(known::Ledger, Vec<known::Branch>)>>,
+    ledger_loading: bool,
     timeout_secs: u64,
 
     modal: Modal,
@@ -143,6 +215,9 @@ struct App {
     selected_entry: Option<String>,
     /// Editable comment field of the selected key.
     key_comment: String,
+    /// Details of the selected key, cached: working them out costs a few
+    /// ssh-keygen calls, and the draw loop runs on every repaint.
+    key_detail: Option<keys::KeyDetail>,
 
     // Fields of the "add host" screen.
     new_alias: String,
@@ -156,7 +231,10 @@ struct App {
     keyname: String,
     keycomment: String,
     /// Result of an ssh-keyscan, waiting for confirmation.
-    scan_result: Vec<(String, String, String)>,
+    scan_result: Vec<Scanned>,
+    /// Where those lines would go: the first UserKnownHostsFile that ssh
+    /// names for the scanned host. Never invented by us.
+    scan_target: Option<std::path::PathBuf>,
     /// Which host a loose entry gets pinned to.
     pin_alias: Option<String>,
     /// Fields of the option picker.
@@ -175,8 +253,9 @@ struct App {
 }
 
 impl App {
-    fn new() -> Self {
+    fn new(ctx: egui::Context) -> Self {
         let mut app = Self {
+            ctx,
             original: String::new(),
             source: Source::default(),
             losses: Vec::new(),
@@ -192,6 +271,9 @@ impl App {
             findings: Vec::new(),
             checking: false,
             rx: None,
+            proof_rx: None,
+            ledger_rx: None,
+            ledger_loading: false,
             timeout_secs: 5,
             modal: Modal::None,
             toast: None,
@@ -200,6 +282,7 @@ impl App {
             selected_key: None,
             selected_entry: None,
             key_comment: String::new(),
+            key_detail: None,
             new_alias: String::new(),
             new_hostname: String::new(),
             new_user: String::new(),
@@ -208,6 +291,7 @@ impl App {
             keyname: String::new(),
             keycomment: String::new(),
             scan_result: Vec::new(),
+            scan_target: None,
             pin_alias: None,
             option_search: String::new(),
             option_selected: None,
@@ -236,26 +320,49 @@ impl App {
         // to see.
         self.selected = (!self.source.hosts.is_empty()).then_some(0);
         self.keys = keys::inventory(&self.source);
+        self.refresh_key_detail();
         self.refresh_ledger();
         self.source.write_work_copy();
     }
 
-    /// Reads the ledger in. Which files those are, it asks ssh: next to
-    /// known_hosts there is often a known_hosts.old with revoked keys, and
-    /// that must never slip in.
+    /// Re-reads the details of the selected key. Costs a few ssh-keygen
+    /// calls, so it runs on selection and after changes — never per frame.
+    fn refresh_key_detail(&mut self) {
+        self.key_detail = self
+            .selected_key
+            .as_deref()
+            .and_then(|n| keys::detail(n, &self.source));
+    }
+
+    /// Reads the ledger in — on a thread. Which files those are, it asks ssh:
+    /// next to known_hosts there is often a known_hosts.old with revoked
+    /// keys, and that must never slip in. Asking costs one `ssh -G` per host
+    /// plus an ssh-keygen per lookup, and doing that on the draw thread held
+    /// the window shut on startup.
     fn refresh_ledger(&mut self) {
         // Every host, not just the first: UserKnownHostsFile can be set per
         // host, and judging one host by another's ledger makes it look like a
         // machine you have visited a hundred times is suddenly unknown.
-        let files = known::files_for_all(&self.source);
-        if files.is_empty() {
-            self.ledger = known::Ledger::default();
-            self.tree.clear();
-            return;
-        }
-        self.ledger = known::Ledger::load(&files);
-        let per_host = known::lookup_per_host(&self.source, &files);
-        self.tree = known::tree(&per_host, &self.ledger);
+        let source = self.source.clone();
+        let ctx = self.ctx.clone();
+        let (tx, rx) = channel();
+        self.ledger_loading = true;
+        self.ledger_rx = Some(rx);
+        std::thread::spawn(move || {
+            let files = known::files_for_all(&source);
+            let (ledger, tree) = if files.is_empty() {
+                (known::Ledger::default(), Vec::new())
+            } else {
+                let ledger = known::Ledger::load(&files);
+                let per_host = known::lookup_per_host(&source, &files);
+                let tree = known::tree(&per_host, &ledger);
+                (ledger, tree)
+            };
+            // Sending fails if the window closed or a newer read replaced
+            // this one; both mean the result is no longer wanted.
+            let _ = tx.send((ledger, tree));
+            ctx.request_repaint();
+        });
     }
 
     /// Asks ssh what applies to the selected host. Costs ~7 ms, so this is
@@ -313,6 +420,9 @@ impl App {
     fn touched(&mut self) {
         self.dirty = true;
         self.keys = keys::inventory(&self.source);
+        // Keep the round-trip panel honest while editing. Pure text work, so
+        // it can afford to run on every edit.
+        self.losses = fidelity::check(&self.original, &self.source);
         // Deliberately NOT re-reading the ledger: an edit does not change it,
         // and it starts two processes.
         self.source.write_work_copy();
@@ -420,24 +530,55 @@ impl App {
             .map(|l| l.to_string())
             .collect();
 
-        // The gate: not "does every line survive" but "does ssh still do the
-        // same thing". Costs a handful of `ssh -G` calls and is the only
-        // answer worth anything.
-        let verdict = proof::compare(&on_disk, &rendered, &self.source);
         let lost_comments = proof::lost_comments(&on_disk, &rendered);
+        // Fresh, against the file as it is on disk now — `self.losses`
+        // describes the file at open time and goes stale with every edit.
+        let losses = fidelity::check(&on_disk, &self.source);
 
+        // The gate: not "does every line survive" but "does ssh still do the
+        // same thing". That is a pile of `ssh -G` calls — seconds on a large
+        // config — so it runs on a thread and the modal says "checking"
+        // instead of freezing the window.
+        let (tx, rx) = channel();
+        let ctx = self.ctx.clone();
+        let source = self.source.clone();
+        let target = rendered.clone();
+        let disk = on_disk;
+        std::thread::spawn(move || {
+            // Two comparisons, not one. The tidied parse of the on-disk text
+            // sits in the middle: disk -> baseline is the rewrite itself and
+            // must change nothing; baseline -> target is exactly what the
+            // session's edits do, shown as information.
+            let disk_source = parser::parse(&disk);
+            let baseline = generate::render(&disk_source);
+            let rewrite = if disk == baseline {
+                // Already in tidied form; nothing to ask ssh about.
+                proof::Verdict::Same { probed: 0 }
+            } else {
+                proof::compare(&disk, &baseline, &disk_source)
+            };
+            let edits = (baseline != target).then(|| proof::compare(&baseline, &target, &source));
+            let _ = tx.send(ProofOutcome { rewrite, edits });
+            ctx.request_repaint();
+        });
+        self.proof_rx = Some(rx);
+
+        // A tick from an earlier save must not carry over to this one.
+        self.force_write = false;
         self.modal = Modal::Save {
             rendered,
             removed,
             added,
             disk_changed,
-            verdict,
+            outcome: None,
             lost_comments,
+            losses,
         };
     }
 
     fn apply_save(&mut self, rendered: &str) {
         self.force_write = false;
+        self.proof_rx = None;
         let target = ssh_config_path();
         if target.exists() {
             let backup = target.with_extension("before-sshctl");
@@ -464,6 +605,14 @@ impl App {
         let alias = self.new_alias.trim().to_string();
         if alias.is_empty() {
             self.say("alias must not be empty", Level::Fail);
+            return;
+        }
+        // `Host two words` is two patterns to ssh, not one name.
+        if alias.contains(char::is_whitespace) {
+            self.say(
+                "an alias must be one word — ssh reads spaces as several patterns",
+                Level::Fail,
+            );
             return;
         }
         // Without a hostname the block yields an address that goes nowhere.
@@ -580,6 +729,27 @@ impl eframe::App for App {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.drain();
+        // Results from the background threads: the proof for the save screen,
+        // and the freshly read ledger. Each receiver is dropped as soon as it
+        // has delivered, so a late answer from an abandoned run has no way in.
+        if let Some(rx) = &self.proof_rx
+            && let Ok(outcome) = rx.try_recv()
+        {
+            self.proof_rx = None;
+            if let Modal::Save { outcome: slot, .. } = &mut self.modal
+                && slot.is_none()
+            {
+                *slot = Some(outcome);
+            }
+        }
+        if let Some(rx) = &self.ledger_rx
+            && let Ok((ledger, tree)) = rx.try_recv()
+        {
+            self.ledger_rx = None;
+            self.ledger_loading = false;
+            self.ledger = ledger;
+            self.tree = tree;
+        }
         let ctx = ui.ctx().clone();
         let ctx = &ctx;
 
@@ -665,6 +835,12 @@ impl eframe::App for App {
                 for t in [Tab::Overview, Tab::Config, Tab::Keys, Tab::KnownHosts] {
                     if ui.selectable_label(self.tab == t, t.title()).clicked() {
                         self.tab = t;
+                        // The key details are cached (they cost ssh-keygen
+                        // calls); entering the tab is the moment to refresh,
+                        // so edits made elsewhere show up.
+                        if t == Tab::Keys {
+                            self.refresh_key_detail();
+                        }
                     }
                 }
             });
@@ -805,8 +981,9 @@ impl App {
                 removed,
                 added,
                 disk_changed,
-                verdict,
+                outcome,
                 lost_comments,
+                losses,
             } => {
                 egui::Window::new("Save to ~/.ssh/config")
                     .collapsible(false)
@@ -824,39 +1001,80 @@ impl App {
                         }
                         // What ssh itself says, above the line count — because
                         // this is the part that actually decides.
-                        match verdict {
-                            proof::Verdict::Same { probed } => {
-                                ui.colored_label(
-                                    colour(Level::Ok),
-                                    format!(
-                                        "Checked with ssh: for all {probed} names it gives \
-                                         exactly the same answer afterwards.",
-                                    ),
-                                );
+                        match outcome {
+                            None => {
+                                ui.horizontal(|ui| {
+                                    ui.spinner();
+                                    ui.label("Asking ssh whether anything changes…");
+                                });
                             }
-                            proof::Verdict::Changed(diffs) => {
-                                ui.colored_label(
-                                    colour(Level::Fail),
-                                    "ssh would behave differently afterwards:",
-                                );
-                                for d in diffs.iter().take(8) {
-                                    ui.monospace(d.describe());
+                            Some(o) => {
+                                match &o.rewrite {
+                                    proof::Verdict::Same { probed: 0 } => {
+                                        ui.colored_label(
+                                            colour(Level::Ok),
+                                            "The file on disk is already in tidied form.",
+                                        );
+                                    }
+                                    proof::Verdict::Same { probed } => {
+                                        ui.colored_label(
+                                            colour(Level::Ok),
+                                            format!(
+                                                "Checked with ssh: the rewrite itself changes \
+                                                 nothing, for all {probed} names asked."
+                                            ),
+                                        );
+                                    }
+                                    proof::Verdict::Changed(diffs) => {
+                                        ui.colored_label(
+                                            colour(Level::Fail),
+                                            "The rewrite itself would change behaviour — \
+                                             beyond what your edits ask for:",
+                                        );
+                                        for d in diffs.iter().take(8) {
+                                            ui.monospace(d.describe());
+                                        }
+                                        if diffs.len() > 8 {
+                                            ui.weak(format!("and {} more", diffs.len() - 8));
+                                        }
+                                    }
+                                    proof::Verdict::Unknown(why) => {
+                                        ui.colored_label(
+                                            colour(Level::Warn),
+                                            format!("Could not check this with ssh: {why}"),
+                                        );
+                                        for loss in losses.iter().take(6) {
+                                            ui.monospace(&loss.line);
+                                        }
+                                        if losses.len() > 6 {
+                                            ui.weak(format!("and {} more", losses.len() - 6));
+                                        }
+                                    }
                                 }
-                                if diffs.len() > 8 {
-                                    ui.weak(format!("and {} more", diffs.len() - 8));
-                                }
-                            }
-                            proof::Verdict::Unknown(why) => {
-                                ui.colored_label(
-                                    colour(Level::Warn),
-                                    format!("Could not check this with ssh: {why}"),
-                                );
-                                if !self.losses.is_empty() {
-                                    ui.label(format!(
-                                        "{} line(s) from your original will not survive this \
-                                         — see the top of the window.",
-                                        self.losses.len()
-                                    ));
+                                match &o.edits {
+                                    None => {}
+                                    Some(proof::Verdict::Same { .. }) => {
+                                        ui.weak("Your edits change nothing about any connection.");
+                                    }
+                                    Some(proof::Verdict::Changed(diffs)) => {
+                                        ui.add_space(4.0);
+                                        ui.strong("Your edits change:");
+                                        for d in diffs.iter().take(8) {
+                                            ui.monospace(d.describe());
+                                        }
+                                        if diffs.len() > 8 {
+                                            ui.weak(format!("and {} more", diffs.len() - 8));
+                                        }
+                                    }
+                                    Some(proof::Verdict::Unknown(why)) => {
+                                        ui.colored_label(
+                                            colour(Level::Warn),
+                                            format!(
+                                                "What your edits change could not be \
+                                                 proved: {why}"
+                                            ),
+                                        );
+                                    }
                                 }
                             }
                         }
@@ -890,34 +1108,43 @@ impl App {
                             });
                         ui.add_space(10.0);
                         ui.horizontal(|ui| {
-                            // The same gate as `sshctl write` on the command
-                            // line: writing something that changes behaviour
-                            // takes a deliberate act, not a click on a button
-                            // that looks like every other one.
-                            let blocked = match verdict {
-                                proof::Verdict::Same { .. } => None,
-                                proof::Verdict::Changed(_) => {
-                                    Some("ssh would behave differently afterwards.")
-                                }
-                                proof::Verdict::Unknown(_) if self.losses.is_empty() => None,
-                                proof::Verdict::Unknown(_) => {
-                                    Some("Lines would be lost and ssh could not be asked about it.")
-                                }
+                            // The alarm and the extra tick are reserved for
+                            // what is genuinely wrong: a rewrite that does
+                            // more than asked, or a proof that could not run.
+                            // A deliberate edit is not an alarm — it is shown
+                            // above, and one click writes it. Crying wolf on
+                            // every edit taught the reflex of ticking the box,
+                            // and that reflex costs more than any gate earns.
+                            let pending = outcome.is_none();
+                            let blocked = match outcome {
+                                None => None,
+                                Some(o) => match (&o.rewrite, &o.edits) {
+                                    (proof::Verdict::Changed(_), _) => {
+                                        Some("The rewrite itself would change behaviour.")
+                                    }
+                                    (proof::Verdict::Unknown(_), _) => {
+                                        Some("ssh could not be asked, so nothing was proved.")
+                                    }
+                                    (_, Some(proof::Verdict::Unknown(_))) => {
+                                        Some("What your edits change could not be proved.")
+                                    }
+                                    _ => None,
+                                },
                             };
-                            if blocked.is_none() {
-                                if ui.button("Write").clicked() {
-                                    save = Some(rendered.clone());
-                                }
-                            } else {
+                            if pending {
+                                ui.add_enabled(false, egui::Button::new("Write"))
+                                    .on_disabled_hover_text("Still checking with ssh.");
+                            } else if let Some(why) = blocked {
                                 ui.add_enabled(false, egui::Button::new("Write"))
                                     .on_disabled_hover_text(format!(
-                                        "{} Tick the box if you want it anyway.",
-                                        blocked.unwrap_or_default()
+                                        "{why} Tick the box if you want it anyway."
                                     ));
                                 ui.checkbox(&mut self.force_write, "I know — write anyway");
                                 if self.force_write && ui.button("Write anyway").clicked() {
                                     save = Some(rendered.clone());
                                 }
+                            } else if ui.button("Write").clicked() {
+                                save = Some(rendered.clone());
                             }
                             if ui.button("Cancel").clicked() {
                                 close = true;
@@ -1028,8 +1255,7 @@ impl App {
                         });
                     });
             }
-            Modal::KeyMade(name) => {
-                let detail = keys::detail(name, &self.source);
+            Modal::KeyMade { name, detail } => {
                 egui::Window::new("Key created")
                     .collapsible(false)
                     .resizable(true)
@@ -1081,7 +1307,8 @@ impl App {
                             ui.label("Hostname");
                             ui.add_sized(
                                 [260.0, 20.0],
-                                egui::TextEdit::singleline(&mut self.keyname),
+                                egui::TextEdit::singleline(&mut self.keyname)
+                                    .hint_text("host, or host:2222"),
                             );
                             if ui.button("Fetch").clicked() {
                                 scan = true;
@@ -1097,24 +1324,14 @@ impl App {
                         if !self.scan_result.is_empty() {
                             ui.add_space(10.0);
                             ui.label(egui::RichText::new("FOUND").small().weak());
-                            for (name, kind, line) in &self.scan_result {
-                                let fp = std::process::Command::new("ssh-keygen")
-                                    .args(["-l", "-f", "-"])
-                                    .stdin(std::process::Stdio::piped())
-                                    .stdout(std::process::Stdio::piped())
-                                    .spawn()
-                                    .ok()
-                                    .and_then(|mut c| {
-                                        use std::io::Write;
-                                        c.stdin.as_mut()?.write_all(line.as_bytes()).ok()?;
-                                        let o = c.wait_with_output().ok()?;
-                                        Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
-                                    })
-                                    .unwrap_or_default();
+                            for s in &self.scan_result {
                                 ui.horizontal(|ui| {
-                                    ui.monospace(format!("{name}  {kind}"));
-                                    ui.weak(fp);
+                                    ui.monospace(format!("{}  {}", s.name, s.kind));
+                                    ui.weak(&s.fingerprint);
                                 });
+                            }
+                            if let Some(target) = &self.scan_target {
+                                ui.weak(format!("will be added to {}", target.display()));
                             }
                             ui.add_space(10.0);
                             if ui.button("Add to known_hosts").clicked() {
@@ -1487,7 +1704,10 @@ impl App {
             match keys::generate(&self.keyname.clone(), &self.keycomment.clone()) {
                 Ok(name) => {
                     self.keys = keys::inventory(&self.source);
-                    self.modal = Modal::KeyMade(name.clone());
+                    self.modal = Modal::KeyMade {
+                        detail: keys::detail(&name, &self.source),
+                        name: name.clone(),
+                    };
                     self.say(format!("{name} created"), Level::Ok);
                 }
                 Err(e) => self.say(e, Level::Fail),
@@ -1497,6 +1717,10 @@ impl App {
             match keys::delete(&name) {
                 Ok(target) => {
                     self.keys = keys::inventory(&self.source);
+                    if self.selected_key.as_deref() == Some(name.as_str()) {
+                        self.selected_key = None;
+                        self.key_detail = None;
+                    }
                     self.modal = Modal::None;
                     self.say(format!("moved to {}", target.display()), Level::Warn);
                 }
@@ -1504,10 +1728,30 @@ impl App {
             }
         }
         if scan {
-            let name = self.keyname.trim().to_string();
-            match known::scan(&name, 22) {
+            let input = self.keyname.trim().to_string();
+            // "host:2222" and "[2001:db8::1]:2222" both work; a bare name
+            // goes to 22. The hop parser already knows these shapes.
+            let (host, port) = match proxy::parse_chain(&input).into_iter().next() {
+                Some(hop) => (hop.host, hop.port.unwrap_or(22)),
+                None => (input.clone(), 22),
+            };
+            match known::scan(&host, port) {
                 Ok(r) => {
-                    self.scan_result = r;
+                    self.scan_result = r
+                        .into_iter()
+                        .map(|(name, kind, line)| Scanned {
+                            fingerprint: fingerprint_of(&line),
+                            name,
+                            kind,
+                            line,
+                        })
+                        .collect();
+                    // Where would ssh itself record this host? That file —
+                    // not "whichever file the ledger listed first", which for
+                    // a host with its own ledger is somebody else's.
+                    self.scan_target = effective::ask_ssh(&host)
+                        .ok()
+                        .and_then(|resolved| known::append_target(&resolved));
                     self.say(
                         format!("{} key(s) fetched", self.scan_result.len()),
                         Level::Ok,
@@ -1515,19 +1759,26 @@ impl App {
                 }
                 Err(e) => {
                     self.scan_result.clear();
+                    self.scan_target = None;
                     self.say(e, Level::Fail);
                 }
             }
         }
         if add_scanned {
-            let lines: Vec<String> = self.scan_result.iter().map(|(_, _, r)| r.clone()).collect();
-            match known::append(&self.ledger.files.clone(), &lines) {
-                Ok(n) => {
-                    self.refresh_ledger();
-                    self.modal = Modal::None;
-                    self.say(format!("{n} line(s) added (backup alongside)"), Level::Ok);
-                }
-                Err(e) => self.say(e, Level::Fail),
+            let lines: Vec<String> = self.scan_result.iter().map(|s| s.line.clone()).collect();
+            match self.scan_target.clone() {
+                Some(target) => match known::append(&target, &lines) {
+                    Ok(n) => {
+                        self.refresh_ledger();
+                        self.modal = Modal::None;
+                        self.say(format!("{n} line(s) added (backup alongside)"), Level::Ok);
+                    }
+                    Err(e) => self.say(e, Level::Fail),
+                },
+                None => self.say(
+                    "ssh did not name a known_hosts file for this host",
+                    Level::Fail,
+                ),
             }
         }
         if let Some(hop) = pick_hop {
@@ -1586,6 +1837,11 @@ impl App {
         if close {
             self.modal = Modal::None;
             self.new_existing_key = None;
+            // Cancelling a save must also drop the "write anyway" tick, or
+            // the next blocked save starts out already armed. The receiver
+            // goes too, so a late proof cannot land in a closed screen.
+            self.force_write = false;
+            self.proof_rx = None;
         }
     }
 }
@@ -2082,13 +2338,16 @@ impl App {
                 new = true;
             }
         });
+        let detail = self.key_detail.clone();
         content_panel(ui, "key_content", |ui| {
-            let Some(name) = selected.as_deref() else {
+            if selected.is_none() {
                 ui.add_space(30.0);
                 ui.vertical_centered(|ui| ui.weak("Pick a key on the left."));
                 return;
-            };
-            let Some(d) = keys::detail(name, &self.source) else {
+            }
+            // Cached on selection: detail() starts ssh-keygen a few times,
+            // and this closure runs on every repaint.
+            let Some(d) = detail.as_ref() else {
                 ui.colored_label(colour(Level::Fail), "Could not read this key.");
                 return;
             };
@@ -2197,10 +2456,13 @@ impl App {
         });
 
         if let Some(n) = pick {
-            self.key_comment = keys::detail(&n, &self.source)
-                .map(|d| d.comment)
-                .unwrap_or_default();
             self.selected_key = Some(n);
+            self.refresh_key_detail();
+            self.key_comment = self
+                .key_detail
+                .as_ref()
+                .map(|d| d.comment.clone())
+                .unwrap_or_default();
         }
         if new {
             self.keyname.clear();
@@ -2220,6 +2482,7 @@ impl App {
             match keys::set_comment(&name, &comment) {
                 Ok(()) => {
                     self.keys = keys::inventory(&self.source);
+                    self.refresh_key_detail();
                     self.say("comment updated", Level::Ok);
                 }
                 Err(e) => self.say(e, Level::Fail),
@@ -2237,6 +2500,7 @@ impl App {
             .flat_map(|t| t.entries.clone())
             .collect();
         let duplicates = self.ledger.duplicate_names();
+        let loading = self.ledger_loading;
         let selected = self.selected_entry.clone();
         let mut pick = None;
         let mut remove = None;
@@ -2249,6 +2513,9 @@ impl App {
             let loose = groups.iter().filter(|(n, _)| !claimed.contains(n)).count();
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("ENTRIES").small().weak());
+                if loading {
+                    ui.spinner();
+                }
                 if loose > 0 {
                     ui.colored_label(
                         colour(Level::Warn),
@@ -2385,6 +2652,7 @@ impl App {
         if fetch {
             self.keyname.clear();
             self.scan_result.clear();
+            self.scan_target = None;
             self.modal = Modal::ScanHost;
         }
         if let Some(a) = new_pin_alias {

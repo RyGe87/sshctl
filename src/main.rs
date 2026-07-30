@@ -32,7 +32,7 @@ enum Commands {
         /// Show the difference without writing anything.
         #[arg(long)]
         dry_run: bool,
-        /// Write even when the round-trip check reports a loss.
+        /// Write even when the proof reports a change, or could not run.
         #[arg(long)]
         force: bool,
     },
@@ -192,26 +192,29 @@ fn cmd_write(dry_run: bool, force: bool) -> Result<ExitCode, String> {
     }
 
     // This file belongs to the user, so we do not touch it unless we can show
-    // that nothing changes about the way it behaves.
+    // that nothing changes about the way it behaves. Not being able to ask is
+    // not a pass: an unproved rewrite needs --force just like a refuted one.
     let blocked = match &verdict {
         proof::Verdict::Same { .. } => None,
         proof::Verdict::Changed(_) => Some("ssh would behave differently afterwards"),
-        // ssh could not be asked, so nothing is proved. Then the text check
-        // has the last word again — the old behaviour, no worse than before.
-        proof::Verdict::Unknown(_) if losses.is_empty() => None,
-        proof::Verdict::Unknown(_) => Some("lines would be lost and ssh could not be asked"),
+        proof::Verdict::Unknown(_) => Some("ssh could not be asked, so nothing was proved"),
     };
-    if let Some(why) = blocked
-        && !force
-    {
-        eprintln!("{}", verdict_report(&verdict, &comments, &losses));
-        return Err(format!(
-            "nothing written — {why}; fix it by hand, or use --force"
-        ));
-    }
-
-    for comment in &comments {
-        eprintln!("note: the comment \"{comment}\" disappears from the file");
+    match blocked {
+        None => {
+            for comment in &comments {
+                eprintln!("note: the comment \"{comment}\" disappears from the file");
+            }
+        }
+        Some(why) => {
+            // Never silently: whoever forces still deserves the full story.
+            eprintln!("{}", verdict_report(&verdict, &comments, &losses));
+            if !force {
+                return Err(format!(
+                    "nothing written — {why}; fix it by hand, or use --force"
+                ));
+            }
+            eprintln!("note: writing anyway because of --force");
+        }
     }
     write_out(&rendered, source.hosts.len())
 }
@@ -431,15 +434,28 @@ fn cmd_add(
         return Err(unreadable_message(why));
     }
 
+    if alias.trim().is_empty() || alias.contains(char::is_whitespace) {
+        return Err(format!(
+            "alias '{alias}' is not usable — it must be one word, without spaces"
+        ));
+    }
     if source.hosts.iter().any(|h| h.alias == alias) {
         return Err(format!("alias '{alias}' already exists"));
     }
-    // Adding means rewriting the whole file, so the same condition applies as
-    // for `write`.
+    // Adding means rewriting the whole file, so the same caution applies as
+    // for `write` — with the same nuance: a standalone comment is a note
+    // there, not a refusal, and one `# note to self` at the top of the file
+    // must not make `add` refuse while `write` carries on.
     let losses = fidelity::check(&original, &source);
-    if !losses.is_empty() {
-        eprintln!("{}", round_trip_warning(&losses));
+    let (comment_losses, real_losses): (Vec<_>, Vec<_>) = losses
+        .into_iter()
+        .partition(|l| l.reason == fidelity::Reason::Comment);
+    if !real_losses.is_empty() {
+        eprintln!("{}", round_trip_warning(&real_losses));
         return Err("nothing written — add this host by hand".to_string());
+    }
+    for loss in &comment_losses {
+        eprintln!("note: {} — {}", loss.line, loss.reason.describe());
     }
 
     // The naming rule lives here in the code, not in your head: key and alias

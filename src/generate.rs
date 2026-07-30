@@ -66,6 +66,18 @@ fn render_host(host: &Host) -> String {
 
     let mut names = vec![host.alias.clone()];
     names.extend(host.aliases.iter().cloned());
+    // A name with a space goes back inside quotes, or one pattern would
+    // come out as two.
+    let names: Vec<String> = names
+        .iter()
+        .map(|n| {
+            if n.contains(char::is_whitespace) {
+                format!("\"{n}\"")
+            } else {
+                n.clone()
+            }
+        })
+        .collect();
     block.push_str(&format!("Host {}\n", names.join(" ")));
     // Alleen uitschrijven als het er stond. Zie Host::hostname_explicit.
     if host.hostname_explicit {
@@ -232,5 +244,14 @@ mod tests {
         let mut s = source();
         s.hosts.push(host("unraid", None));
         assert!(s.validate().iter().any(|p| p.contains("unraid")));
+    }
+
+    #[test]
+    fn an_alias_with_a_space_is_written_back_in_quotes() {
+        // `Host "my server"` is one pattern to ssh; without the quotes the
+        // written file would suddenly hold two.
+        let mut s = source();
+        s.hosts[0].alias = "my server".into();
+        assert!(render(&s).contains("Host \"my server\""), "{}", render(&s));
     }
 }

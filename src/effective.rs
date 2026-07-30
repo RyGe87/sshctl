@@ -271,8 +271,11 @@ fn sets_keyword(directives: &[String], keyword: &str, value: &str) -> bool {
         if v.split_whitespace().any(|part| part == value) {
             return true;
         }
-        // ssh -G sometimes fills in ~, so compare on the tail end as well.
-        value.ends_with(v.trim_start_matches("~/")) || v.ends_with(&value)
+        // ssh -G sometimes fills in ~, so paths also match on their tail end.
+        // Only paths: `Port 22` in a block must not claim a resolved
+        // `port 2222` just because one number is a suffix of the other.
+        let path_like = v.contains('/') || value.contains('/');
+        path_like && (value.ends_with(v.trim_start_matches("~/")) || v.ends_with(&value))
     })
 }
 
@@ -464,6 +467,17 @@ compression no
             e.get("hostname").unwrap().origin,
             Origin::ThisBlock("web1".into())
         );
+    }
+
+    #[test]
+    fn a_numeric_value_is_not_claimed_by_its_suffix() {
+        // Something we do not model (a Match block, say) set port 2222; the
+        // host's own block says 22. Suffix matching blamed the block for a
+        // value it never set — while the block literally says otherwise.
+        let src = parser::parse("Host b\n  HostName b.example\n  Port 22\n");
+        let g = parse_g("host b\nhostname b.example\nport 2222\n");
+        let e = attribute("b", &g, &src, None);
+        assert_eq!(e.get("port").unwrap().origin, Origin::SshDefault);
     }
 
     #[test]

@@ -86,6 +86,13 @@ pub fn parse(text: &str) -> Source {
             continue;
         };
         let lower = keyword.to_ascii_lowercase();
+        // A comment only stays pending while it sits directly above a Host
+        // line. Any setting line breaks that chain: the comment belonged
+        // inside the block above it, and holding on to it glued a note about
+        // one host's key onto the next, unrelated host.
+        if lower != "host" {
+            pending_comment = None;
+        }
         let value = &clean_value(&lower, raw_value);
         if value.is_empty() {
             // Everything after the keyword turned out to be a comment. ssh
@@ -104,7 +111,6 @@ pub fn parse(text: &str) -> Source {
             // `Host` belongs to it.
             in_verbatim = lower == "match";
             in_defaults = false;
-            pending_comment = None;
             continue;
         }
 
@@ -113,7 +119,13 @@ pub fn parse(text: &str) -> Source {
                 push(&mut source, done);
             }
             in_verbatim = false;
-            let names: Vec<&str> = value.split_whitespace().collect();
+            // From the raw value, not the cleaned one: `Host "my server"` is
+            // ONE pattern with a space in it, and the general unquoting had
+            // already taken the quotes off before the split could see them.
+            let names = split_names(strip_comment(raw_value).trim());
+            if names.is_empty() {
+                continue;
+            }
 
             // `Host *` and nothing else is the defaults section. `Host * !prod`
             // is not: ssh applies that to everything except prod, and treating
@@ -125,8 +137,8 @@ pub fn parse(text: &str) -> Source {
             }
 
             current = Some(Host {
-                alias: names[0].to_string(),
-                aliases: names[1..].iter().map(|s| s.to_string()).collect(),
+                alias: names[0].clone(),
+                aliases: names[1..].to_vec(),
                 comment: pending_comment.take(),
                 group: current_group.clone(),
                 ..Default::default()
@@ -265,6 +277,31 @@ fn strip_comment(value: &str) -> &str {
         }
     }
     value
+}
+
+/// Splits a `Host` line into its patterns, the way ssh reads it: whitespace
+/// separates, but a double-quoted stretch stays together. `Host "my server"`
+/// is one pattern; splitting it in two made a block that matches something
+/// else entirely.
+fn split_names(value: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut current = String::new();
+    let mut quoted = false;
+    for c in value.chars() {
+        match c {
+            '"' => quoted = !quoted,
+            c if c.is_whitespace() && !quoted => {
+                if !current.is_empty() {
+                    out.push(std::mem::take(&mut current));
+                }
+            }
+            c => current.push(c),
+        }
+    }
+    if !current.is_empty() {
+        out.push(current);
+    }
+    out
 }
 
 /// Takes off a matching pair of surrounding double quotes. ssh uses them to
@@ -451,6 +488,19 @@ Host laptop laptop.example
     }
 
     #[test]
+    fn a_comment_between_options_does_not_stick_to_the_next_block() {
+        // It sat inside block a. Attaching it to block b moved a note about
+        // a's key above an unrelated host — and `write` then rewrote the file
+        // that way.
+        let s = parse(
+            "Host a\n  HostName a.nl\n  # switch this key to ed25519\n  \
+             IdentityFile ~/.ssh/x\nHost b\n  HostName b.nl\n",
+        );
+        assert_eq!(s.hosts[0].comment, None);
+        assert_eq!(s.hosts[1].comment, None, "the comment belongs to no block");
+    }
+
+    #[test]
     fn a_match_block_is_not_stuffed_into_a_host() {
         // Match opens a new section; storing it as an option in the previous
         // block would silently change the meaning. It is kept verbatim
@@ -557,6 +607,37 @@ Host laptop laptop.example
             "the second key must survive, got {:?}",
             s.hosts[0].options
         );
+    }
+
+    #[test]
+    fn a_quoted_pattern_with_a_space_stays_one_pattern() {
+        // `Host "my server"` is one name to ssh. Splitting it in two made a
+        // block for `"my` and `server"` — matching something else entirely.
+        let s = parse("Host \"my server\"\n  HostName 192.0.2.7\n");
+        assert_eq!(s.hosts[0].alias, "my server");
+        assert!(s.hosts[0].aliases.is_empty());
+        let rendered = crate::generate::render(&s);
+        assert!(
+            rendered.contains("Host \"my server\""),
+            "the quotes have to come back: got\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn quoted_and_bare_names_mix_on_one_host_line() {
+        let s = parse("Host web1 \"web 2\" web3\n  User x\n");
+        assert_eq!(s.hosts[0].alias, "web1");
+        assert_eq!(s.hosts[0].aliases, vec!["web 2", "web3"]);
+    }
+
+    #[test]
+    fn gratuitous_quotes_round_trip_without_a_false_loss() {
+        // `Host "web1"` needs no quotes; the rewrite drops them. To ssh that
+        // is the same line, so it must not be reported as a loss.
+        let original = "Host \"web1\"\n  HostName web1.example\n";
+        let s = parse(original);
+        assert_eq!(s.hosts[0].alias, "web1");
+        assert_eq!(crate::fidelity::check(original, &s), vec![]);
     }
 
     #[test]

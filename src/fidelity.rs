@@ -57,8 +57,7 @@ pub fn check(original: &str, source: &Source) -> Vec<Loss> {
     let survives: Vec<String> = rendered.lines().map(normalise).collect();
 
     let mut losses = Vec::new();
-    let lines: Vec<&str> = original.lines().collect();
-    for (i, raw) in lines.iter().enumerate() {
+    for raw in original.lines() {
         let line = raw.trim();
 
         if line.is_empty() {
@@ -66,13 +65,12 @@ pub fn check(original: &str, source: &Source) -> Vec<Loss> {
         }
 
         if line.starts_with('#') {
-            // A comment right above a Host line is kept as `comment`; the rest
-            // is lost when rewriting.
-            let belongs_to_host = lines
-                .get(i + 1)
-                .map(|next| next.trim().to_ascii_lowercase().starts_with("host "))
-                .unwrap_or(false);
-            if !belongs_to_host {
+            // A comment is lost only when it really does not come back. A
+            // comment right above a Host survives as `comment`, and a group
+            // heading is written out again by the generator — guessing from
+            // the position instead of looking at the result reported both as
+            // lost, and the second one showed up on every tidy file.
+            if !survives.contains(&normalise(line)) {
                 losses.push(Loss {
                     line: line.to_string(),
                     reason: Reason::Comment,
@@ -122,10 +120,11 @@ pub fn check(original: &str, source: &Source) -> Vec<Loss> {
 }
 
 /// Makes lines comparable: keyword lowercased, `=` as a space, doubled
-/// whitespace gone. `IdentityFile=~/x` and `  identityfile ~/x` are the same
-/// thing to ssh and have to be the same thing here.
+/// whitespace gone, quotes off. `IdentityFile=~/x` and `  identityfile ~/x`
+/// are the same thing to ssh and have to be the same thing here — and so are
+/// `Host "web1"` and `Host web1`.
 fn normalise(line: &str) -> String {
-    let line = line.trim().replace('=', " ");
+    let line = line.trim().replace('=', " ").replace('"', "");
     let mut parts = line.split_whitespace();
     let Some(keyword) = parts.next() else {
         return String::new();
@@ -183,6 +182,29 @@ Host unraid
         let losses = check(original, &source);
         assert_eq!(losses.len(), 1, "got {losses:?}");
         assert_eq!(losses[0].line, "# passing thought");
+        assert_eq!(losses[0].reason, Reason::Comment);
+    }
+
+    #[test]
+    fn a_group_heading_is_not_reported_as_lost() {
+        // The generator writes it back itself; calling it a loss put a
+        // warning banner on every file that uses groups.
+        let original = "# ---------- home ----------\n\nHost a\n  HostName a.nl\n";
+        let source = parser::parse(original);
+        assert_eq!(check(original, &source), vec![]);
+    }
+
+    #[test]
+    fn a_comment_inside_a_block_is_reported_as_lost() {
+        // The parser cannot hold on to it (only comments right above a Host
+        // survive), so the honest answer is "this line goes" — not quietly
+        // moving it to the next block, which is what used to happen.
+        let original =
+            "Host a\n  HostName a.nl\n  # inline note\n  User root\nHost b\n  HostName b.nl\n";
+        let source = parser::parse(original);
+        let losses = check(original, &source);
+        assert_eq!(losses.len(), 1, "got {losses:?}");
+        assert_eq!(losses[0].line, "# inline note");
         assert_eq!(losses[0].reason, Reason::Comment);
     }
 

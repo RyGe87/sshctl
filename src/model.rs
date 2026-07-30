@@ -27,7 +27,26 @@ pub fn work_path() -> PathBuf {
 }
 
 pub fn home() -> PathBuf {
-    PathBuf::from(std::env::var("HOME").expect("HOME is not set"))
+    // Windows sets USERPROFILE and usually no HOME; panicking on the normal
+    // state of a supported platform is not an option.
+    std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .map(PathBuf::from)
+        .expect("neither HOME nor USERPROFILE is set")
+}
+
+/// Permission bits of a file, or `None` where the notion does not exist.
+/// Windows has no Unix modes; inventing a number there would trip every
+/// checker that compares against 0o600.
+#[cfg(unix)]
+pub fn mode_of(path: &Path) -> Option<u32> {
+    use std::os::unix::fs::PermissionsExt;
+    Some(std::fs::metadata(path).ok()?.permissions().mode() & 0o777)
+}
+
+#[cfg(not(unix))]
+pub fn mode_of(_path: &Path) -> Option<u32> {
+    None
 }
 
 /// Throws away all working files. Meant to run both on startup and on exit, so
@@ -257,6 +276,11 @@ impl Source {
             if host.alias.trim().is_empty() {
                 problems.push("a host has an empty alias".to_string());
             }
+            // No complaint about whitespace in an alias: `Host "my server"`
+            // is legal ssh, and the generator puts the quotes back. The GUI
+            // and `add` refuse to *create* such names — free text with a
+            // space in it is nearly always two names typed as one — but a
+            // file that already has one is not broken.
             // No complaint about a missing HostName: that is valid ssh and
             // means "use the name you typed".
         }

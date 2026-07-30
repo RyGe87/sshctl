@@ -245,12 +245,7 @@ pub fn detail(name: &str, source: &Source) -> Option<KeyDetail> {
         Err(_) => (None, false),
     };
 
-    let mode = std::fs::metadata(&path)
-        .map(|m| {
-            use std::os::unix::fs::PermissionsExt;
-            m.permissions().mode() & 0o777
-        })
-        .unwrap_or(0);
+    let mode = crate::model::mode_of(&path).unwrap_or(0);
 
     let target = ssh_dir().join(name);
     let used_by = source
@@ -360,8 +355,7 @@ pub fn delete(name: &str) -> Result<std::path::PathBuf, String> {
     }
     let dir = ssh_dir().join("deleted");
     std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
-    // Permissions equal to those of ~/.ssh: private keys live in here.
-    let _ = std::fs::set_permissions(&dir, std::os::unix::fs::PermissionsExt::from_mode(0o700));
+    restrict_to_owner(&dir);
 
     let target = free_name(&dir, name);
     std::fs::rename(&source, &target).map_err(|e| format!("move failed: {e}"))?;
@@ -377,6 +371,18 @@ pub fn delete(name: &str) -> Result<std::path::PathBuf, String> {
     }
     Ok(target)
 }
+
+/// Permissions equal to those of ~/.ssh: private keys live in here. On
+/// Windows there is nothing to set — the profile directory is already the
+/// user's own.
+#[cfg(unix)]
+fn restrict_to_owner(dir: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+}
+
+#[cfg(not(unix))]
+fn restrict_to_owner(_dir: &Path) {}
 
 /// Looks for a name that does not exist yet, so that a second deletion does
 /// not overwrite the first.

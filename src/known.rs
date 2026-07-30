@@ -500,6 +500,25 @@ mod tests {
     }
 
     #[test]
+    fn the_append_target_is_sshs_first_user_file_even_when_it_does_not_exist() {
+        // New trust lines belong where ssh itself would write them: the first
+        // UserKnownHostsFile. Not the global file, and not "whichever file
+        // exists" — a fresh machine has none yet.
+        let resolved = vec![
+            (
+                "globalknownhostsfile".to_string(),
+                "/etc/ssh/ssh_known_hosts".to_string(),
+            ),
+            (
+                "userknownhostsfile".to_string(),
+                "/nowhere/known_hosts /nowhere/known_hosts2".to_string(),
+            ),
+        ];
+        let target = append_target(&resolved).unwrap();
+        assert_eq!(target, PathBuf::from("/nowhere/known_hosts"));
+    }
+
+    #[test]
     fn a_tilde_in_a_path_gets_expanded() {
         let p = split_paths("~/.ssh/known_hosts");
         assert!(p[0].is_absolute());
@@ -555,8 +574,9 @@ pub fn remove_entry(files: &[PathBuf], raw_names: &str) -> Result<usize, String>
         let backup = file.with_extension("before-sshctl");
         std::fs::copy(file, &backup)
             .map_err(|e| format!("could not back up {}: {e}", file.display()))?;
-        std::fs::write(file, updated)
-            .map_err(|e| format!("could not write {}: {e}", file.display()))?;
+        // The same care as for the config: a crash halfway through a plain
+        // write leaves a ledger with trust silently missing.
+        crate::write_atomically(file, &updated)?;
         total += removed;
     }
     if total == 0 {
@@ -654,14 +674,28 @@ pub fn scan(hostname: &str, port: u16) -> Result<Vec<(String, String, String)>, 
         .collect())
 }
 
-/// Appends fetched lines to the first known_hosts file.
-pub fn append(files: &[PathBuf], lines: &[String]) -> Result<usize, String> {
-    let Some(file) = files.first() else {
-        return Err("no known_hosts file known".to_string());
-    };
+/// The file ssh itself would record a new key in for this destination: the
+/// first `UserKnownHostsFile` out of `ssh -G`. Two things are deliberate
+/// here. It is not "whichever file the ledger happened to list first" — a
+/// host with its own ledger elsewhere in the config must not receive keys
+/// meant for the default file. And it is not filtered on existence: on a
+/// fresh machine the file is not there *yet*, and that is exactly when you
+/// want it created.
+pub fn append_target(resolved: &[(String, String)]) -> Option<PathBuf> {
+    resolved
+        .iter()
+        .find(|(k, _)| k == "userknownhostsfile")
+        .and_then(|(_, v)| split_paths(v).into_iter().next())
+}
+
+/// Appends fetched lines to the given known_hosts file, leaving a backup
+/// next to it when there is something to back up.
+pub fn append(file: &Path, lines: &[String]) -> Result<usize, String> {
     let existing = std::fs::read_to_string(file).unwrap_or_default();
-    let backup = file.with_extension("before-sshctl");
-    std::fs::copy(file, &backup).map_err(|e| format!("could not make a backup: {e}"))?;
+    if file.exists() {
+        let backup = file.with_extension("before-sshctl");
+        std::fs::copy(file, &backup).map_err(|e| format!("could not make a backup: {e}"))?;
+    }
     let mut out = existing;
     if !out.is_empty() && !out.ends_with('\n') {
         out.push('\n');
@@ -670,6 +704,6 @@ pub fn append(files: &[PathBuf], lines: &[String]) -> Result<usize, String> {
         out.push_str(l);
         out.push('\n');
     }
-    std::fs::write(file, out).map_err(|e| format!("could not write {}: {e}", file.display()))?;
+    crate::write_atomically(file, &out)?;
     Ok(lines.len())
 }

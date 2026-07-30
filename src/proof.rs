@@ -89,8 +89,10 @@ fn names_to_probe(source: &Source, texts: [&str; 2]) -> Vec<String> {
     let mut add = |n: &str| {
         let n = n.trim().trim_matches('"');
         // A pattern is not a name you can ask about: `ssh -G '*'` would match
-        // itself and tell you nothing.
-        if n.is_empty() || n.contains(['*', '?', '!']) {
+        // itself and tell you nothing. And a quoted name with a space in it
+        // ssh refuses outright ("hostname contains invalid characters"), so
+        // asking would wreck the whole proof instead of strengthening it.
+        if n.is_empty() || n.contains(['*', '?', '!']) || n.contains(char::is_whitespace) {
             return;
         }
         if !names.iter().any(|existing| existing == n) {
@@ -156,8 +158,19 @@ fn unprovable_loss(original: &str, rendered: &str) -> Option<String> {
     for raw in original.lines() {
         let line = raw.trim();
         let lower = line.to_ascii_lowercase();
-        let risky = lower.starts_with("include ")
-            || (lower.starts_with("match ") && lower.contains("exec"));
+        let mut words = lower.split_whitespace();
+        let keyword = words.next().unwrap_or("");
+        // ssh also accepts `Include=file`, and a tab after the keyword.
+        let keyword = keyword.split('=').next().unwrap_or(keyword);
+        let risky = match keyword {
+            "include" => true,
+            // Only the criterion word itself counts: `Match host executive`
+            // is an ordinary block, and deleting it is a *provable* change —
+            // the probe list picks `executive` up. A substring match turned
+            // that into a vague "could not prove anything".
+            "match" => words.any(|w| w == "exec" || w == "!exec"),
+            _ => false,
+        };
         if !risky {
             continue;
         }
@@ -185,16 +198,25 @@ pub fn compare(original: &str, rendered: &str, source: &Source) -> Verdict {
     }
 
     let names = names_to_probe(source, [original, rendered]);
+    let before_all = resolve_many(&before_file.path, &names);
+    let after_all = resolve_many(&after_file.path, &names);
     let mut differences = Vec::new();
-    for name in &names {
-        let before = match resolve(&before_file.path, name) {
+    for ((name, before), after) in names.iter().zip(before_all).zip(after_all) {
+        let before = match before {
             Ok(v) => v,
-            // The original itself is not something ssh will accept. Then there
-            // is nothing to compare against, and saying so is the honest
-            // answer — this is also how you find out your config is broken.
-            Err(e) => return Verdict::Unknown(format!("ssh rejects the current config: {e}")),
+            // Either ssh is not there at all, or the original itself is not
+            // something ssh will accept. Both mean there is nothing to compare
+            // against, and saying so is the honest answer — the second is
+            // also how you find out your config is broken.
+            Err(e) => {
+                return Verdict::Unknown(if e.starts_with("could not start ssh") {
+                    e
+                } else {
+                    format!("ssh rejects the current config: {e}")
+                });
+            }
         };
-        let after = match resolve(&after_file.path, name) {
+        let after = match after {
             Ok(v) => v,
             Err(e) => {
                 differences.push(Difference {
@@ -257,6 +279,46 @@ fn comment_of(line: &str) -> Option<String> {
     None
 }
 
+/// [`resolve`] for every name, a few at a time. One probe costs a process
+/// start-up (~10 ms), and a large config asks about hundreds of names —
+/// sequentially that put whole seconds between clicking save and seeing the
+/// answer. Results come back in name order, so verdicts stay deterministic.
+fn resolve_many(config: &PathBuf, names: &[String]) -> Vec<Result<Vec<(String, String)>, String>> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::mpsc::channel;
+    let workers = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .min(8)
+        .min(names.len().max(1));
+    let (tx, rx) = channel();
+    let next = AtomicUsize::new(0);
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            let tx = tx.clone();
+            let next = &next;
+            scope.spawn(move || {
+                loop {
+                    let i = next.fetch_add(1, Ordering::Relaxed);
+                    if i >= names.len() {
+                        break;
+                    }
+                    if tx.send((i, resolve(config, &names[i]))).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+    });
+    drop(tx);
+    let mut out: Vec<Result<Vec<(String, String)>, String>> =
+        names.iter().map(|_| Err(String::new())).collect();
+    for (i, result) in rx {
+        out[i] = result;
+    }
+    out
+}
+
 /// `ssh -G -F <file> <name>` as a map of setting to value.
 fn resolve(config: &PathBuf, name: &str) -> Result<Vec<(String, String)>, String> {
     let out = Command::new("ssh")
@@ -265,7 +327,7 @@ fn resolve(config: &PathBuf, name: &str) -> Result<Vec<(String, String)>, String
         .arg(config)
         .arg(name)
         .output()
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| format!("could not start ssh: {e}"))?;
     if !out.status.success() {
         // ssh writes CRLF on stderr on every platform, so trim rather than
         // compare.
@@ -556,6 +618,35 @@ mod tests {
             !names.iter().any(|n| n.contains('*')),
             "a pattern is not a name you can ask about: {names:?}"
         );
+    }
+
+    #[test]
+    fn an_include_with_a_tab_is_still_unprovable_when_it_disappears() {
+        // `Include\t~/.ssh/extra` is the same directive to ssh; a check that
+        // looked for "include " (with a space) waved its deletion through.
+        let text = "Include\t~/.ssh/extra\nHost alfa\n  HostName alfa.example\n";
+        let stripped = "Host alfa\n  HostName alfa.example\n";
+        let source = parser::parse(text);
+        match compare(text, stripped, &source) {
+            Verdict::Unknown(why) => assert!(why.contains("Include"), "got {why}"),
+            other => panic!("expected Unknown, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_hostname_containing_exec_is_not_mistaken_for_match_exec() {
+        // Deleting `Match host executive` is a real, provable change: the
+        // probe list contains `executive`. It must come out as Changed, not
+        // as a vague "could not prove anything".
+        let text = "Host alfa\n  HostName alfa.example\nMatch host executive\n  User someoneelse\n";
+        let stripped = "Host alfa\n  HostName alfa.example\n";
+        let source = parser::parse(text);
+        match compare(text, stripped, &source) {
+            Verdict::Changed(diffs) => {
+                assert!(diffs.iter().any(|d| d.name == "executive"), "got {diffs:?}");
+            }
+            other => panic!("expected Changed, got {other:?}"),
+        }
     }
 
     #[test]
