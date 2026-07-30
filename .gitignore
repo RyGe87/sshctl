@@ -1,0 +1,6 @@
+/target
+.DS_Store
+.claude/
+
+# The isolated GitHub export lives here with its own fresh git repo.
+/publish/

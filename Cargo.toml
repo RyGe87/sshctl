@@ -1,0 +1,31 @@
+[package]
+name = "sshctl"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Show, check and safely rewrite ~/.ssh/config, with a CLI and a GUI on one core. It proves a rewrite changes nothing by asking ssh -G, instead of guessing from the text."
+authors = ["Geert Rymenants"]
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/RyGe87/sshctl"
+homepage = "https://github.com/RyGe87/sshctl"
+keywords = ["ssh", "ssh-config", "known-hosts", "cli", "gui"]
+categories = ["command-line-utilities", "gui", "config"]
+exclude = ["/target", "*.png"]
+
+[[bin]]
+name = "sshctl"
+path = "src/main.rs"
+
+[[bin]]
+name = "sshctl-gui"
+path = "src/bin/sshctl-gui.rs"
+
+[dependencies]
+clap = { version = "4.6.4", features = ["derive"] }
+eframe = { version = "0.35.0", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
+serde = { version = "1.0.229", features = ["derive"] }
+toml = "1.1.4"
+
+[profile.release]
+strip = true
