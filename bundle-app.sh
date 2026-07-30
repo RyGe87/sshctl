@@ -9,11 +9,17 @@ set -euo pipefail
 cd "$(dirname "$0")"
 APP="target/sshctl.app"
 
-cargo build --release --bin sshctl-gui
-
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp target/release/sshctl-gui "$APP/Contents/MacOS/sshctl"
+
+# CI hands in a prebuilt (universal) binary via BIN; without it, build one
+# for this machine.
+if [[ -n "${BIN:-}" ]]; then
+  cp "$BIN" "$APP/Contents/MacOS/sshctl"
+else
+  cargo build --release --bin sshctl-gui
+  cp target/release/sshctl-gui "$APP/Contents/MacOS/sshctl"
+fi
 
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>

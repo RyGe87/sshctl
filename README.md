@@ -1,5 +1,9 @@
 # sshctl
 
+[![ci](https://github.com/RyGe87/sshctl/actions/workflows/ci.yml/badge.svg)](https://github.com/RyGe87/sshctl/actions/workflows/ci.yml)
+[![release](https://img.shields.io/github/v/release/RyGe87/sshctl)](https://github.com/RyGe87/sshctl/releases)
+[![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 Show, check and update your SSH configuration, tidied up — with a CLI and a
 window on the same core.
 
@@ -119,6 +123,19 @@ commands, so the test command fails while the key does work. Going purely by
 the exit status would report GitHub as broken; `classify_login` therefore looks
 at the error message.
 
+## Install
+
+Prebuilt binaries are on the
+[releases page](https://github.com/RyGe87/sshctl/releases): macOS (universal,
+with a ready-made `sshctl.app`), Linux (x86_64) and Windows (x86_64), each
+archive holding both the CLI and the GUI. macOS quarantines downloaded
+programs: open the app the first time via right-click > Open, or
+`xattr -d com.apple.quarantine sshctl.app`.
+
+With Rust installed there is also
+`cargo install --git https://github.com/RyGe87/sshctl`, which builds both
+binaries from source.
+
 ## Usage
 
 ```sh
@@ -161,6 +178,8 @@ not in your head, so key and host can no longer drift apart.
 
 ## The GUI
 
+![The overview tab: one host as the stages of a connection, with behind every value where it comes from](docs/screenshot.png)
+
 ```sh
 ./bundle-app.sh --install     # puts sshctl.app in /Applications
 ```
@@ -187,14 +206,20 @@ changing**:
 The check runs the moment you open it — when you open the lid you want to know
 how your network is doing, not go looking for a button first.
 
-Saving first shows the difference, proves with `ssh -G` that nothing about the
-connection changes, warns if the file has changed outside the app in the
-meantime, and puts a backup next to the original.
+Saving first shows the difference, and then asks `ssh -G` two separate
+questions — in the background, while the window stays alive. *Does the rewrite
+itself change anything?* is the safety gate: a difference there blocks, with
+an explicit override. *What do your own edits change?* is information you
+asked for by editing: it is listed, and one click writes it. Keeping the two
+apart is what saves the alarm from crying wolf on every deliberate edit. It
+also warns if the file has changed outside the app in the meantime, and puts
+a backup next to the original.
 
 Two things that determine the shape:
 
-- **The checks run in a separate thread** and trickle in. One dead host costs
-  seconds; the window must not look frozen for that long.
+- **The slow work runs on separate threads** and trickles in: the checks, the
+  reading of the ledger, and the `ssh -G` proof behind the save screen. One
+  dead host costs seconds; the window must not look frozen for that long.
 - **The GUI holds no logic of its own about ssh.** Everything comes from the
   same library as the CLI, so the two shells cannot possibly drift apart.
 
@@ -241,6 +266,19 @@ Version 0.1: it does what it says and every fix carries a test, but it has not
 yet been through many hands. Treat `write` with the healthy suspicion it treats
 your file — there is always a backup as `config.before-sshctl`, and it refuses
 to write when it cannot prove the connection is unchanged.
+
+## Built with Claude
+
+This project is a collaboration between Geert Rymenants and Claude,
+Anthropic's LLM. The first working version was written together with Claude
+Opus 5. Claude Fable 5 then took the codebase through a full review and fixed
+what it found — a parser that quietly moved comments onto the wrong host, a
+doctor that could report a false "OK" on an error it did not recognise, a
+save gate in the GUI that judged by stale data — and went on to restructure
+the save flow into its two separate questions, move the proof and the ledger
+onto background threads, parallelise the `ssh -G` probes, and teach the
+parser quoted `Host "my server"` patterns. Every fix carries a test, and
+every commit names its co-author.
 
 ## License
 
