@@ -11,7 +11,7 @@ repository = "https://github.com/RyGe87/sshctl"
 homepage = "https://github.com/RyGe87/sshctl"
 keywords = ["ssh", "ssh-config", "known-hosts", "cli", "gui"]
 categories = ["command-line-utilities", "gui", "config"]
-exclude = ["/target", "*.png"]
+exclude = ["/target", "*.png", "/.github", "/docs"]
 
 [[bin]]
 name = "sshctl"
