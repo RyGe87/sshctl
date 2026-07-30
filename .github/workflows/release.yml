@@ -6,6 +6,9 @@ on:
 
 permissions:
   contents: write
+  # For the build-provenance attestations on the artifacts.
+  id-token: write
+  attestations: write
 
 env:
   CARGO_TERM_COLOR: always
@@ -118,6 +121,15 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           merge-multiple: true
+      - run: sha256sum *.tar.gz *.zip > SHA256SUMS
+      # Linux and Windows have no notary; verifiable provenance is the
+      # honest equivalent. `gh attestation verify <file> --owner RyGe87`
+      # proves an artifact was built from this repository by this workflow.
+      - uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: |
+            *.tar.gz
+            *.zip
       - uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
@@ -126,3 +138,4 @@ jobs:
           files: |
             *.tar.gz
             *.zip
+            SHA256SUMS

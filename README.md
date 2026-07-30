@@ -132,6 +132,12 @@ archive holding both the CLI and the GUI. The macOS app and binaries are
 signed with a Developer ID and notarized by Apple, so they open like any
 other program.
 
+Linux and Windows have no notary, so those artifacts carry the honest
+equivalent: a build-provenance attestation.
+`gh attestation verify <file> --owner RyGe87` proves a download was built
+from this repository by GitHub's own runners, and `SHA256SUMS` lists every
+checksum.
+
 With Rust installed there is also
 `cargo install --git https://github.com/RyGe87/sshctl`, which builds both
 binaries from source.
