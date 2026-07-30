@@ -130,7 +130,7 @@ jobs:
           subject-path: |
             *.tar.gz
             *.zip
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true
           # A tag with a dash (v0.2.0-rc.1) is a trial run, not a release.
