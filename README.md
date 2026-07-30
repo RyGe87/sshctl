@@ -145,8 +145,7 @@ equivalent: a build-provenance attestation.
 from this repository by GitHub's own runners, and `SHA256SUMS` lists every
 checksum.
 
-With Rust installed there is also
-`cargo install --git https://github.com/RyGe87/sshctl`, which builds both
+With Rust installed there is also `cargo install sshctl`, which builds both
 binaries from source.
 
 ## Usage
