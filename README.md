@@ -4,8 +4,10 @@
 [![release](https://img.shields.io/github/v/release/RyGe87/sshctl)](https://github.com/RyGe87/sshctl/releases)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Show, check and update your SSH configuration, tidied up — with a CLI, a
-window and a terminal UI on the same core.
+Show, check and update your SSH configuration, tidied up — with a terminal
+UI, a CLI and a window on the same core. The terminal UI is the default
+shell: it is the one that works everywhere, including over ssh on the very
+machines you are managing.
 
 ## Why
 
@@ -128,22 +130,16 @@ at the error message.
 Prebuilt binaries are on the
 [releases page](https://github.com/RyGe87/sshctl/releases): macOS (universal,
 with a ready-made `sshctl.app`), Linux (x86_64) and Windows (x86_64), each
-archive holding both the CLI and the GUI. The macOS app and binaries are
-signed with a Developer ID and notarized by Apple, so they open like any
-other program.
+archive holding all three shells — `sshctl-tui`, `sshctl` and `sshctl-gui`.
+The macOS app and binaries are signed with a Developer ID and notarized by
+Apple, so they open like any other program.
 
 Homebrew is the short route:
 
 ```sh
-brew install ryge87/tap/sshctl           # CLI + GUI binaries
+brew install ryge87/tap/sshctl           # the three shells' binaries
 brew install --cask ryge87/tap/sshctl    # the macOS app, into /Applications
 ```
-
-Linux and Windows have no notary, so those artifacts carry the honest
-equivalent: a build-provenance attestation.
-`gh attestation verify <file> --owner RyGe87` proves a download was built
-from this repository by GitHub's own runners, and `SHA256SUMS` lists every
-checksum.
 
 With Rust installed there is `cargo install sshctl`, which builds the
 terminal UI — the default shell, because it is the one that works everywhere
@@ -157,9 +153,16 @@ cargo install sshctl --no-default-features --features cli  # only the CLI
 cargo install sshctl --all-features                        # all three
 ```
 
+Linux and Windows have no notary, so those artifacts carry the honest
+equivalent: a build-provenance attestation.
+`gh attestation verify <file> --owner RyGe87` proves a download was built
+from this repository by GitHub's own runners, and `SHA256SUMS` lists every
+checksum.
+
 ## Usage
 
 ```sh
+sshctl-tui                   # the four tabs in your terminal — the default shell
 sshctl list                  # short table of your hosts
 sshctl show                  # your config tidied up, the way write saves it
 sshctl write --dry-run       # the difference, without writing
@@ -196,6 +199,36 @@ Only a `Host *` block that was already there fills in the shared settings.
 
 The key is always called `id_ed25519_<alias>`. That rule lives in the code and
 not in your head, so key and host can no longer drift apart.
+
+## The terminal UI — the default shell
+
+Four tabs — the first for looking, the other three for changing — in plain
+characters, for the places a window cannot follow: over ssh, in tmux, on the
+machine with no screen — which is usually the machine whose config has been
+lying the longest.
+
+```text
+sshctl   /home/you/.ssh/config
+  overview  │  config  │  keys  │  known_hosts
+┌HOSTS───────────────┐┌─────────────────────────────────────────────────────┐
+│● github.com        ││github.com                                           │
+│● gitlab.com        ││1  WHICH RULES APPLY                                 │
+│                    ││  Host github.com    ~/.ssh/config                   │
+│                    ││  Host *   /etc/ssh/ssh_config — not in your own file│
+│                    ││2  WHERE TO                                          │
+│                    ││  Hostname   github.com   the block 'Host github.com'│
+│                    ││  Port       22           ssh's own default          │
+└────────────────────┘└─────────────────────────────────────────────────────┘
+┌FINDINGS (2)───────────────────────────────────────────────────────────────┐
+│NOTE github.com   no IdentityFile — ssh will then try arbitrary agent keys │
+└───────────────────────────────────────────────────────────────────────────┘
+ j/k host · 1-4 tabs · C check · S save · R reload · ? help · q quit
+```
+
+The keys are on the screen, and `?` lists the rest. `S` opens the save
+screen with its two separate questions — the same screen the GUI has, with
+the same proof and the same rule that an unproved write takes a deliberate
+override.
 
 ## The GUI
 
@@ -242,40 +275,12 @@ Two things that determine the shape:
   reading of the ledger, and the `ssh -G` proof behind the save screen. One
   dead host costs seconds; the window must not look frozen for that long.
 - **The GUI holds no logic of its own about ssh.** Everything comes from the
-  same library as the CLI, so the two shells cannot possibly drift apart.
+  same library as the CLI and the terminal UI, so the three shells cannot
+  possibly drift apart.
 
 One detail that might surprise you: the status dots are drawn rather than set
 as a character. The round symbols `●` and `○` are missing from egui's default
 font and would show up as empty boxes.
-
-## The terminal UI
-
-The same four tabs in plain characters, for the places a window cannot
-follow: over ssh, in tmux, on the machine with no screen — which is usually
-the machine whose config has been lying the longest.
-
-```text
-sshctl   /home/you/.ssh/config
-  overview  │  config  │  keys  │  known_hosts
-┌HOSTS───────────────┐┌─────────────────────────────────────────────────────┐
-│● github.com        ││github.com                                           │
-│● gitlab.com        ││1  WHICH RULES APPLY                                 │
-│                    ││  Host github.com    ~/.ssh/config                   │
-│                    ││  Host *   /etc/ssh/ssh_config — not in your own file│
-│                    ││2  WHERE TO                                          │
-│                    ││  Hostname   github.com   the block 'Host github.com'│
-│                    ││  Port       22           ssh's own default          │
-└────────────────────┘└─────────────────────────────────────────────────────┘
-┌FINDINGS (2)───────────────────────────────────────────────────────────────┐
-│NOTE github.com   no IdentityFile — ssh will then try arbitrary agent keys │
-└───────────────────────────────────────────────────────────────────────────┘
- j/k host · 1-4 tabs · C check · S save · R reload · ? help · q quit
-```
-
-The keys are on the screen, and `?` lists the rest. `S` opens the same save
-screen as the GUI, with the same proof and the same rule that an unproved
-write takes a deliberate override. Where egui had to *draw* its status dots
-because ● is missing from its font, a terminal just prints the character.
 
 ## Building
 
@@ -314,10 +319,10 @@ checking elsewhere.
 
 ## Status
 
-Version 0.1: it does what it says and every fix carries a test, but it has not
-yet been through many hands. Treat `write` with the healthy suspicion it treats
-your file — there is always a backup as `config.before-sshctl`, and it refuses
-to write when it cannot prove the connection is unchanged.
+Early days: three shells on one core, and every fix carries a test — but it
+has not yet been through many hands. Treat `write` with the healthy suspicion
+it treats your file — there is always a backup as `config.before-sshctl`, and
+it refuses to write when it cannot prove the connection is unchanged.
 
 ## Built with Claude
 
@@ -329,8 +334,10 @@ doctor that could report a false "OK" on an error it did not recognise, a
 save gate in the GUI that judged by stale data — and went on to restructure
 the save flow into its two separate questions, move the proof and the ledger
 onto background threads, parallelise the `ssh -G` probes, and teach the
-parser quoted `Host "my server"` patterns. Every fix carries a test, and
-every commit names its co-author.
+parser quoted `Host "my server"` patterns. The third shell — the terminal
+UI, now the default install — Claude Fable 5 built end to end and drove
+through tmux before it shipped. Every fix carries a test, and every commit
+names its co-author.
 
 ## License
 
