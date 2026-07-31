@@ -25,10 +25,12 @@ jobs:
             libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --check
-      - run: cargo clippy --all-targets -- -D warnings
+      # All features: the default build is the TUI alone, but CI answers for
+      # every shell.
+      - run: cargo clippy --all-targets --all-features -- -D warnings
       # The tests lean on the real ssh and ssh-keygen binaries, deliberately:
       # what ssh makes of a config is the yardstick, not what looks right.
-      - run: cargo test
+      - run: cargo test --all-features
 
   # Windows gets a compile check: the code is written to build there, but it
   # has not been run in anger yet — see the README.
@@ -37,4 +39,4 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
-      - run: cargo check --all-targets
+      - run: cargo check --all-targets --all-features

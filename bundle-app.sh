@@ -17,7 +17,7 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 if [[ -n "${BIN:-}" ]]; then
   cp "$BIN" "$APP/Contents/MacOS/sshctl"
 else
-  cargo build --release --bin sshctl-gui
+  cargo build --release --features gui --bin sshctl-gui
   cp target/release/sshctl-gui "$APP/Contents/MacOS/sshctl"
 fi
 

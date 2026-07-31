@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.0 — 2026-07-31
+
+- The terminal UI is the default shell: `cargo install sshctl` now builds
+  `sshctl-tui` alone — it is the shell that works everywhere, and the
+  cheapest to build. The CLI and the GUI are one feature flag away
+  (`--features cli`, `--features gui`, `--all-features` for everything);
+  the release archives still hold all three.
+
 ## 0.2.0 — 2026-07-31
 
 - A third shell: `sshctl-tui`, the same four tabs in plain characters, for

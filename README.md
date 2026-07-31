@@ -145,13 +145,16 @@ equivalent: a build-provenance attestation.
 from this repository by GitHub's own runners, and `SHA256SUMS` lists every
 checksum.
 
-With Rust installed there is also `cargo install sshctl`, which builds all
-three binaries from source. Each shell sits behind its own cargo feature, so
-nobody compiles a byte more than the shell they want:
+With Rust installed there is `cargo install sshctl`, which builds the
+terminal UI — the default shell, because it is the one that works everywhere
+and the cheapest to build. Each shell sits behind its own cargo feature, so
+nobody compiles a byte more than they want:
 
 ```sh
-cargo install sshctl --no-default-features --features tui   # only the TUI
-cargo install sshctl --no-default-features --features cli   # only the CLI
+cargo install sshctl                                       # the TUI
+cargo install sshctl --features cli                        # + the CLI
+cargo install sshctl --no-default-features --features cli  # only the CLI
+cargo install sshctl --all-features                        # all three
 ```
 
 ## Usage
@@ -277,8 +280,8 @@ because ● is missing from its font, a terminal just prints the character.
 ## Building
 
 ```sh
-cargo build --release        # all three: sshctl, sshctl-gui and sshctl-tui
-cargo test                   # all of them in the library
+cargo build --release --all-features   # all three shells
+cargo test --all-features              # every test in the library
 ```
 
 Structure: `src/lib.rs` is the core, with `parser` (config → model),

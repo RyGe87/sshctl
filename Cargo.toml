@@ -1,6 +1,6 @@
 [package]
 name = "sshctl"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.88"
 description = "Show, check and safely rewrite ~/.ssh/config, with a CLI, a GUI and a TUI on one core. It proves a rewrite changes nothing by asking ssh -G, instead of guessing from the text."
@@ -14,10 +14,15 @@ categories = ["command-line-utilities", "gui", "config"]
 exclude = ["/target", "*.png", "/.github", "/docs"]
 
 # Three shells, one core. Each shell sits behind its own feature, so nobody
-# has to compile or download a byte more than the shell they want:
-#   cargo install sshctl --no-default-features --features tui
+# has to compile or download a byte more than the shell they want. The
+# terminal UI is the default: it is the shell that works everywhere — over
+# ssh, in tmux, on machines without a screen — and the cheapest to build.
+#   cargo install sshctl                                       -> the TUI
+#   cargo install sshctl --features cli                        -> + the CLI
+#   cargo install sshctl --no-default-features --features cli  -> only the CLI
+#   cargo install sshctl --all-features                        -> all three
 [features]
-default = ["cli", "gui", "tui"]
+default = ["tui"]
 cli = ["dep:clap"]
 gui = ["dep:eframe"]
 tui = ["dep:ratatui"]
