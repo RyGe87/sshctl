@@ -240,6 +240,45 @@ pub fn compare(original: &str, rendered: &str, source: &Source) -> Verdict {
     }
 }
 
+/// The save screen's two questions, answered separately.
+///
+/// "Does the rewrite itself change anything?" is the safety gate: a
+/// difference there is a bug or a surprise, and blocks. "What do your own
+/// edits change?" is information you asked for by editing: it is shown, and
+/// one confirmation writes it. One combined comparison could not tell the
+/// two apart, so every deliberate edit set off the same alarm as a rewrite
+/// bug — and an alarm that cries wolf on every save teaches the reflex of
+/// hitting the override, which costs more than any gate earns.
+///
+/// This lives in the library because two shells present it; the day they
+/// each computed it themselves would be the day they start to disagree.
+#[derive(Debug)]
+pub struct SaveJudgement {
+    /// The rewrite with the session's edits set aside: the on-disk text
+    /// against the tidied parse of that same text.
+    pub rewrite: Verdict,
+    /// The edits: the tidied on-disk text against what would be written.
+    /// `None` when there are none.
+    pub edits: Option<Verdict>,
+}
+
+/// Judges a save the way the shells present it. The tidied parse of the
+/// on-disk text sits in the middle: disk -> baseline is the rewrite itself
+/// and must change nothing; baseline -> target is exactly what the session's
+/// edits do.
+pub fn judge_save(on_disk: &str, target: &str, source: &Source) -> SaveJudgement {
+    let disk_source = crate::parser::parse(on_disk);
+    let baseline = crate::generate::render(&disk_source);
+    let rewrite = if on_disk == baseline {
+        // Already in tidied form; nothing to ask ssh about.
+        Verdict::Same { probed: 0 }
+    } else {
+        compare(on_disk, &baseline, &disk_source)
+    };
+    let edits = (baseline != target).then(|| compare(&baseline, target, source));
+    SaveJudgement { rewrite, edits }
+}
+
 /// Comments that were in the original and are not in the rewrite.
 ///
 /// Kept apart from the proof on purpose: `ssh -G` says nothing about comments,
@@ -646,6 +685,38 @@ mod tests {
                 assert!(diffs.iter().any(|d| d.name == "executive"), "got {diffs:?}");
             }
             other => panic!("expected Changed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_pure_tidy_of_a_tidy_file_needs_no_ssh_and_no_edit_answer() {
+        let text = "Host alfa\n  HostName alfa.example\n";
+        let source = parser::parse(text);
+        let tidy = generate::render(&source);
+        let j = judge_save(&tidy, &tidy, &source);
+        assert!(
+            matches!(j.rewrite, Verdict::Same { probed: 0 }),
+            "{:?}",
+            j.rewrite
+        );
+        assert!(j.edits.is_none());
+    }
+
+    #[test]
+    fn an_edit_is_judged_separately_from_the_rewrite() {
+        // The rewrite itself is clean; the changed port shows up only under
+        // "edits" — information, not an alarm about the rewrite.
+        let on_disk = "Host alfa\n  HostName alfa.example\n  Port 22\n";
+        let mut source = parser::parse(on_disk);
+        source.hosts[0].port = Some(2222);
+        let target = generate::render(&source);
+        let j = judge_save(on_disk, &target, &source);
+        assert!(j.rewrite.is_proven_safe(), "{:?}", j.rewrite);
+        match j.edits {
+            Some(Verdict::Changed(diffs)) => {
+                assert!(diffs.iter().any(|d| d.key == "port" && d.after == "2222"));
+            }
+            other => panic!("the edit has to show up, got {other:?}"),
         }
     }
 

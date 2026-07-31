@@ -4,8 +4,8 @@
 [![release](https://img.shields.io/github/v/release/RyGe87/sshctl)](https://github.com/RyGe87/sshctl/releases)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Show, check and update your SSH configuration, tidied up — with a CLI and a
-window on the same core.
+Show, check and update your SSH configuration, tidied up — with a CLI, a
+window and a terminal UI on the same core.
 
 ## Why
 
@@ -145,8 +145,14 @@ equivalent: a build-provenance attestation.
 from this repository by GitHub's own runners, and `SHA256SUMS` lists every
 checksum.
 
-With Rust installed there is also `cargo install sshctl`, which builds both
-binaries from source.
+With Rust installed there is also `cargo install sshctl`, which builds all
+three binaries from source. Each shell sits behind its own cargo feature, so
+nobody compiles a byte more than the shell they want:
+
+```sh
+cargo install sshctl --no-default-features --features tui   # only the TUI
+cargo install sshctl --no-default-features --features cli   # only the CLI
+```
 
 ## Usage
 
@@ -239,10 +245,39 @@ One detail that might surprise you: the status dots are drawn rather than set
 as a character. The round symbols `●` and `○` are missing from egui's default
 font and would show up as empty boxes.
 
+## The terminal UI
+
+The same four tabs in plain characters, for the places a window cannot
+follow: over ssh, in tmux, on the machine with no screen — which is usually
+the machine whose config has been lying the longest.
+
+```text
+sshctl   /home/you/.ssh/config
+  overview  │  config  │  keys  │  known_hosts
+┌HOSTS───────────────┐┌─────────────────────────────────────────────────────┐
+│● github.com        ││github.com                                           │
+│● gitlab.com        ││1  WHICH RULES APPLY                                 │
+│                    ││  Host github.com    ~/.ssh/config                   │
+│                    ││  Host *   /etc/ssh/ssh_config — not in your own file│
+│                    ││2  WHERE TO                                          │
+│                    ││  Hostname   github.com   the block 'Host github.com'│
+│                    ││  Port       22           ssh's own default          │
+└────────────────────┘└─────────────────────────────────────────────────────┘
+┌FINDINGS (2)───────────────────────────────────────────────────────────────┐
+│NOTE github.com   no IdentityFile — ssh will then try arbitrary agent keys │
+└───────────────────────────────────────────────────────────────────────────┘
+ j/k host · 1-4 tabs · C check · S save · R reload · ? help · q quit
+```
+
+The keys are on the screen, and `?` lists the rest. `S` opens the same save
+screen as the GUI, with the same proof and the same rule that an unproved
+write takes a deliberate override. Where egui had to *draw* its status dots
+because ● is missing from its font, a terminal just prints the character.
+
 ## Building
 
 ```sh
-cargo build --release        # both binaries: sshctl and sshctl-gui
+cargo build --release        # all three: sshctl, sshctl-gui and sshctl-tui
 cargo test                   # all of them in the library
 ```
 
@@ -252,7 +287,9 @@ Structure: `src/lib.rs` is the core, with `parser` (config → model),
 belongs to which host), `known` (the ledger), `pattern` (Host patterns),
 `catalog` (the settings you can pick), `proxy` (jump chains), `effective`
 (`ssh -G` + provenance) and `doctor`. `src/main.rs` is the CLI,
-`src/bin/sshctl-gui.rs` the GUI.
+`src/bin/sshctl-gui.rs` the GUI, `src/bin/sshctl-tui.rs` the terminal UI.
+No shell knows anything about ssh of its own, so the three cannot drift
+apart.
 
 ```text
   ~/.ssh/config  --parser-->  Source  --generate-->  ~/.ssh/config

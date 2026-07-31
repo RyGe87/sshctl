@@ -34,6 +34,9 @@ jobs:
           lipo -create -output dist/sshctl-gui \
             target/aarch64-apple-darwin/release/sshctl-gui \
             target/x86_64-apple-darwin/release/sshctl-gui
+          lipo -create -output dist/sshctl-tui \
+            target/aarch64-apple-darwin/release/sshctl-tui \
+            target/x86_64-apple-darwin/release/sshctl-tui
           BIN=dist/sshctl-gui ./bundle-app.sh
       - name: sign and notarize
         if: env.HAVE_SIGNING == 'true'
@@ -60,13 +63,13 @@ jobs:
             | grep -om1 '"Developer ID Application: [^"]*"' | tr -d '"')
           echo "signing as $IDENT"
           codesign --force --options runtime --timestamp --keychain "$KC" \
-            --sign "$IDENT" dist/sshctl dist/sshctl-gui
+            --sign "$IDENT" dist/sshctl dist/sshctl-gui dist/sshctl-tui
           codesign --force --options runtime --timestamp --keychain "$KC" \
             --sign "$IDENT" target/sshctl.app
           # Notarize the app and the bare binaries; staple the app so the
           # approval also holds offline (bare Mach-O files cannot be stapled).
           ditto -c -k --keepParent target/sshctl.app app-submit.zip
-          zip -j bins-submit.zip dist/sshctl dist/sshctl-gui
+          zip -j bins-submit.zip dist/sshctl dist/sshctl-gui dist/sshctl-tui
           xcrun notarytool submit app-submit.zip --wait \
             --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$NOTARY_PASSWORD"
           xcrun notarytool submit bins-submit.zip --wait \
@@ -77,7 +80,7 @@ jobs:
       - name: package
         run: |
           ditto -c -k --keepParent target/sshctl.app sshctl-macos-app.zip
-          tar -C dist -czf sshctl-macos-universal.tar.gz sshctl sshctl-gui
+          tar -C dist -czf sshctl-macos-universal.tar.gz sshctl sshctl-gui sshctl-tui
       - uses: actions/upload-artifact@v4
         with:
           name: macos
@@ -94,7 +97,7 @@ jobs:
           sudo apt-get install -y libxkbcommon-dev libwayland-dev \
             libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
       - run: cargo build --release
-      - run: tar -C target/release -czf sshctl-linux-x86_64.tar.gz sshctl sshctl-gui
+      - run: tar -C target/release -czf sshctl-linux-x86_64.tar.gz sshctl sshctl-gui sshctl-tui
       - uses: actions/upload-artifact@v4
         with:
           name: linux
@@ -107,7 +110,7 @@ jobs:
       - run: cargo build --release
       - run: >
           Compress-Archive
-          -Path target/release/sshctl.exe, target/release/sshctl-gui.exe
+          -Path target/release/sshctl.exe, target/release/sshctl-gui.exe, target/release/sshctl-tui.exe
           -DestinationPath sshctl-windows-x86_64.zip
       - uses: actions/upload-artifact@v4
         with:

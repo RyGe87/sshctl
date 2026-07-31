@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.0 — 2026-07-31
+
+- A third shell: `sshctl-tui`, the same four tabs in plain characters, for
+  over ssh, tmux and machines without a screen. Same core, same save screen
+  with its two separate questions, same proof.
+- Each shell sits behind its own cargo feature, so nobody compiles or
+  installs more than the shell they want:
+  `cargo install sshctl --no-default-features --features tui`.
+- The save judgement (does the rewrite change anything? what do your edits
+  change?) moved into the library, shared by both interactive shells.
+- The "will not survive a rewrite" banner no longer counts lines your own
+  edits add — the save screen judges those with ssh.
+
 ## 0.1.0 — 2026-07-30
 
 The first public release: show, check and safely rewrite `~/.ssh/config`,

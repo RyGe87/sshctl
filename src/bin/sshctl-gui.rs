@@ -20,7 +20,6 @@ use sshctl::generate;
 use sshctl::keys::{self, KeyEntry};
 use sshctl::known;
 use sshctl::model::{self, Host, Source, ssh_config_path};
-use sshctl::parser;
 use sshctl::proof;
 use sshctl::proxy;
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -82,25 +81,6 @@ struct Scanned {
     fingerprint: String,
 }
 
-/// What the background proof works out for the save screen.
-///
-/// Two separate questions, because they deserve different treatment on the
-/// screen. "Does the rewrite itself change anything?" is the safety gate: a
-/// difference there is a bug or a surprise, and blocks. "What do your own
-/// edits change?" is information you asked for by editing: it is shown, and
-/// one click writes it. One combined comparison could not tell the two
-/// apart, so every deliberate edit set off the same alarm as a rewrite bug —
-/// and an alarm that cries wolf on every save teaches the reflex of ticking
-/// the override, which costs more than any gate is worth.
-struct ProofOutcome {
-    /// The rewrite with your edits set aside: the on-disk text against the
-    /// tidied parse of that same text.
-    rewrite: proof::Verdict,
-    /// Your edits: the tidied on-disk text against what would be written.
-    /// `None` when there are none.
-    edits: Option<proof::Verdict>,
-}
-
 /// `ssh-keygen -l` over stdin, so the line never has to touch the disk.
 fn fingerprint_of(line: &str) -> String {
     std::process::Command::new("ssh-keygen")
@@ -130,7 +110,7 @@ enum Modal {
         /// What ssh itself says. `None` while the background thread is still
         /// asking — the modal opens at once and says "checking" instead of
         /// freezing the window for the length of the proof.
-        outcome: Option<ProofOutcome>,
+        outcome: Option<proof::SaveJudgement>,
         /// Comments that go away. Nothing breaks, but you should know.
         lost_comments: Vec<String>,
         /// Round-trip losses against the file as it is on disk **now**. The
@@ -199,7 +179,7 @@ struct App {
     rx: Option<Receiver<Msg>>,
     /// The proof for the save screen, under way on a thread. Dropped when the
     /// modal closes, so a late answer cannot land in the wrong screen.
-    proof_rx: Option<Receiver<ProofOutcome>>,
+    proof_rx: Option<Receiver<proof::SaveJudgement>>,
     /// The ledger being read on a thread: one `ssh -G` per host adds up, and
     /// it used to hold the window shut on startup.
     ledger_rx: Option<Receiver<(known::Ledger, Vec<known::Branch>)>>,
@@ -545,20 +525,7 @@ impl App {
         let target = rendered.clone();
         let disk = on_disk;
         std::thread::spawn(move || {
-            // Two comparisons, not one. The tidied parse of the on-disk text
-            // sits in the middle: disk -> baseline is the rewrite itself and
-            // must change nothing; baseline -> target is exactly what the
-            // session's edits do, shown as information.
-            let disk_source = parser::parse(&disk);
-            let baseline = generate::render(&disk_source);
-            let rewrite = if disk == baseline {
-                // Already in tidied form; nothing to ask ssh about.
-                proof::Verdict::Same { probed: 0 }
-            } else {
-                proof::compare(&disk, &baseline, &disk_source)
-            };
-            let edits = (baseline != target).then(|| proof::compare(&baseline, &target, &source));
-            let _ = tx.send(ProofOutcome { rewrite, edits });
+            let _ = tx.send(proof::judge_save(&disk, &target, &source));
             ctx.request_repaint();
         });
         self.proof_rx = Some(rx);
@@ -671,6 +638,17 @@ impl App {
         self.new_existing_key = None;
         self.touched();
         self.say(format!("'{alias}' added — not saved yet"), Level::Ok);
+    }
+
+    /// The losses worth a banner: lines of the file that would really go.
+    /// An `Added` line is not one of them — that is usually this session's
+    /// own edit, and the save screen judges those with ssh. Calling it
+    /// "saving would delete them" was exactly wrong.
+    fn banner_losses(&self) -> Vec<&Loss> {
+        self.losses
+            .iter()
+            .filter(|l| l.reason != fidelity::Reason::Added)
+            .collect()
     }
 
     /// The worst verdict per host, so a dot can be coloured.
@@ -882,20 +860,25 @@ impl eframe::App for App {
 
         // The round-trip warning sits at the top and not among the findings:
         // it decides whether saving is safe at all.
-        if !self.losses.is_empty() {
+        let banner = self.banner_losses();
+        if !banner.is_empty() {
+            let lines: Vec<(String, &'static str)> = banner
+                .iter()
+                .map(|l| (l.line.clone(), l.reason.describe()))
+                .collect();
             egui::Panel::top("roundtrip").show(ui, |ui| {
                 ui.add_space(6.0);
                 ui.colored_label(
                     colour(Level::Warn),
                     format!(
                         "{} line(s) will not survive the rewrite — saving would delete them:",
-                        self.losses.len()
+                        lines.len()
                     ),
                 );
-                for loss in &self.losses {
+                for (line, reason) in &lines {
                     ui.horizontal_wrapped(|ui| {
-                        ui.monospace(&loss.line);
-                        ui.weak(loss.reason.describe());
+                        ui.monospace(line);
+                        ui.weak(*reason);
                     });
                 }
                 ui.add_space(6.0);
@@ -1912,7 +1895,7 @@ impl App {
         let eff = self.effective.take();
         let keys = self.keys.clone();
         let known_types = self.known_types.clone();
-        let losses = self.losses.len();
+        let losses = self.banner_losses().len();
         let selected = self.selected;
         let mut pick = None;
 

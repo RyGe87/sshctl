@@ -30,8 +30,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleName</key>              <string>sshctl</string>
   <key>CFBundleDisplayName</key>       <string>sshctl</string>
   <key>CFBundleIdentifier</key>        <string>io.github.ryge87.sshctl</string>
-  <key>CFBundleVersion</key>           <string>0.1.0</string>
-  <key>CFBundleShortVersionString</key><string>0.1.0</string>
+  <key>CFBundleVersion</key>           <string>0.2.0</string>
+  <key>CFBundleShortVersionString</key><string>0.2.0</string>
   <key>CFBundleExecutable</key>        <string>sshctl</string>
   <key>CFBundlePackageType</key>       <string>APPL</string>
   <key>LSMinimumSystemVersion</key>    <string>11.0</string>
