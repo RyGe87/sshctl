@@ -21,7 +21,7 @@ jobs:
       # from bundle-app.sh stands and the build still succeeds.
       HAVE_SIGNING: ${{ secrets.APPLE_CERTIFICATE != '' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
       - run: cargo build --release --all-features --target aarch64-apple-darwin
       - run: cargo build --release --all-features --target x86_64-apple-darwin
@@ -91,7 +91,7 @@ jobs:
   linux:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: |
           sudo apt-get update
           sudo apt-get install -y libxkbcommon-dev libwayland-dev \
@@ -106,7 +106,7 @@ jobs:
   windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: cargo build --release --all-features
       - run: >
           Compress-Archive
