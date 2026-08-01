@@ -564,7 +564,7 @@ fn cmd_explain(alias: String, all: bool) -> Result<ExitCode, String> {
 
     let invisible = eff.invisible();
     if !invisible.is_empty() {
-        println!("\nSYSTEM-WIDE — NOT IN YOUR FILE");
+        println!("\nSYSTEM-WIDE");
         for s in invisible {
             println!("   {} {}   <- {}", s.keyword, s.value, s.origin.describe());
         }

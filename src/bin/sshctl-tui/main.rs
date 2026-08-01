@@ -2036,7 +2036,7 @@ fn overview_lines(app: &App) -> Vec<Line<'static>> {
         let invisible = e.invisible();
         if !invisible.is_empty() {
             out.push(Line::default());
-            out.push(Line::from(warn_span("SYSTEM-WIDE — NOT IN YOUR FILE")));
+            out.push(Line::from(warn_span("SYSTEM-WIDE")));
             for s in invisible {
                 out.push(Line::from(vec![
                     Span::raw(format!("  {} {}", s.keyword, s.value)),
