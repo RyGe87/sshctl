@@ -259,11 +259,8 @@ impl Layout {
             .filter(|c| matches!(c, Constraint::Min(_)))
             .count() as u32;
         let surplus = u32::from(total).saturating_sub(fixed);
-        let (each, mut leftover) = if mins == 0 {
-            (0, 0)
-        } else {
-            (surplus / mins, surplus % mins)
-        };
+        let each = surplus.checked_div(mins).unwrap_or(0);
+        let mut leftover = surplus.checked_rem(mins).unwrap_or(0);
 
         let mut out = Vec::with_capacity(self.constraints.len());
         let mut at = if self.vertical { area.y } else { area.x };
@@ -351,13 +348,11 @@ impl Block {
         frame.set(left, bottom, '└', style);
         frame.set(right, bottom, '┘', style);
         if let Some(title) = &self.title {
-            let mut x = left + 1;
-            for ch in title.chars() {
+            for (x, ch) in (left + 1..).zip(title.chars()) {
                 if x >= right {
                     break;
                 }
                 frame.set(x, top, ch, style);
-                x += 1;
             }
         }
         Rect {

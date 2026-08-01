@@ -90,15 +90,13 @@ jobs:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           merge-multiple: true
-      - run: sha256sum *.tar.gz *.zip > SHA256SUMS
+      - run: sha256sum *.tar.gz > SHA256SUMS
       # Linux and Windows have no notary; verifiable provenance is the
       # honest equivalent. `gh attestation verify <file> --owner RyGe87`
       # proves an artifact was built from this repository by this workflow.
       - uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
-          subject-path: |
-            *.tar.gz
-            *.zip
+          subject-path: "*.tar.gz"
       # The gh CLI is part of the runner image: publishing a release needs no
       # third-party action. A tag with a dash (v0.2.0-rc.1) is a trial run,
       # not a release.
@@ -110,7 +108,7 @@ jobs:
           flags=(-R "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes --verify-tag)
           case "$GITHUB_REF_NAME" in *-*) flags+=(--prerelease) ;; esac
           gh release create "$GITHUB_REF_NAME" "${flags[@]}" \
-            *.tar.gz *.zip SHA256SUMS
+            *.tar.gz SHA256SUMS
 
   # crates.io comes last: a published version can never be taken back, so
   # everything reversible has to have succeeded first. Auth is OIDC trusted
