@@ -39,11 +39,3 @@ jobs:
       # The tests lean on the real ssh and ssh-keygen binaries, deliberately:
       # what ssh makes of a config is the yardstick, not what looks right.
       - run: cargo test --all-features
-
-  # Windows gets a compile check: the code is written to build there, but it
-  # has not been run in anger yet — see the README.
-  windows:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - run: cargo check --all-targets --all-features

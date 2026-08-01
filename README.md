@@ -22,10 +22,11 @@ key was refused.
 
 Prebuilt binaries are on the
 [releases page](https://github.com/RyGe87/sshctl/releases): macOS (universal,
-with a ready-made `sshctl.app`), Linux (x86_64) and Windows (x86_64), each
-archive holding all three shells — `sshctl-tui`, `sshctl` and `sshctl-gui`.
-The macOS app and binaries are signed with a Developer ID and notarized by
-Apple, so they open like any other program.
+with a ready-made `sshctl.app`) and Linux (x86_64), each archive holding all
+three shells — `sshctl-tui`, `sshctl` and `sshctl-gui`. The macOS app and
+binaries are signed with a Developer ID and notarized by Apple, so they open
+like any other program. On Windows, the Linux build under WSL is the way to
+run sshctl; the last native build (v0.3.0) stays downloadable, unmaintained.
 
 Homebrew is the short route:
 
@@ -51,14 +52,14 @@ cargo install sshctl --all-features                        # all three
 The `ssh` and `ssh-keygen` binaries on your `PATH` — sshctl leans on them for
 the truth rather than reimplementing it. OpenSSH 8.2 or newer is best; on
 anything older the algorithm check cannot run and says so instead of skipping
-silently. It is written to be portable (Linux, macOS, Windows), but so far only
-macOS has been run in anger; the notes in the source mark what still needs
-checking elsewhere.
+silently. It is written for Linux and macOS — on Windows, run it under WSL —
+but so far only macOS has been run in anger; the notes in the source mark what
+still needs checking elsewhere.
 
 ### Verifying a download
 
-Linux and Windows have no notary, so those artifacts carry the honest
-equivalent: a build-provenance attestation.
+Linux has no notary, so that artifact carries the honest equivalent: a
+build-provenance attestation.
 `gh attestation verify <file> --owner RyGe87` proves a download was built
 from this repository by GitHub's own runners, and `SHA256SUMS` lists every
 checksum.
