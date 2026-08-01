@@ -983,7 +983,7 @@ impl App {
         // A new subject starts at the top: switching tab or selection
         // rewinds the detail scroll. Except in the config field list, where
         // j/k walks the detail itself.
-        let switches_subject = matches!(key.code, KeyCode::Tab)
+        let switches_subject = matches!(key.code, KeyCode::Tab | KeyCode::BackTab)
             || matches!(key.code, KeyCode::Char(c) if ('1'..='4').contains(&c))
             || (list_step(&key).is_some()
                 && !(self.tab == Tab::Config && self.config_fields_focused));
@@ -1008,6 +1008,13 @@ impl App {
             KeyCode::Tab => {
                 let i = TABS.iter().position(|t| *t == self.tab).unwrap_or(0);
                 self.tab = TABS[(i + 1) % TABS.len()];
+                if self.tab == Tab::Keys {
+                    self.refresh_key_detail();
+                }
+            }
+            KeyCode::BackTab => {
+                let i = TABS.iter().position(|t| *t == self.tab).unwrap_or(0);
+                self.tab = TABS[(i + TABS.len() - 1) % TABS.len()];
                 if self.tab == Tab::Keys {
                     self.refresh_key_detail();
                 }
@@ -1935,7 +1942,7 @@ fn overview_lines(app: &App) -> Vec<Line<'static>> {
             Style::new().add_modifier(Modifier::BOLD),
         )),
         Line::default(),
-        header("1  WHICH RULES APPLY"),
+        header("1 WHICH RULES APPLY"),
     ];
     match &app.effective {
         Some(e) if !e.matching_blocks.is_empty() => {
@@ -1968,7 +1975,7 @@ fn overview_lines(app: &App) -> Vec<Line<'static>> {
             .map(|s| s.origin.clone())
     };
     out.push(Line::default());
-    out.push(header("2  WHERE TO"));
+    out.push(header("2 WHERE TO"));
     out.push(row(
         "Hostname",
         &value("hostname"),
@@ -1990,7 +1997,7 @@ fn overview_lines(app: &App) -> Vec<Line<'static>> {
         out.push(row("Which way", &way, None));
     }
     out.push(Line::default());
-    out.push(header("3  WHO AM I"));
+    out.push(header("3 WHO AM I"));
     out.push(row("User", &value("user"), origin("user").as_ref()));
     let key_name = host.key.clone().unwrap_or_default();
     out.push(row("Key", &key_name, origin("identityfile").as_ref()));
@@ -2011,7 +2018,7 @@ fn overview_lines(app: &App) -> Vec<Line<'static>> {
         )));
     }
     out.push(Line::default());
-    out.push(header("4  WHO IS THE DESTINATION"));
+    out.push(header("4 WHO IS THE DESTINATION"));
     if app.known_types.is_empty() {
         out.push(Line::from(warn_span(
             "  Not in known_hosts — the first connection will ask for trust.",
@@ -2228,23 +2235,34 @@ fn render_findings(f: &mut Frame, app: &App, area: Rect) {
         .filter(|x| x.subject != "orphan")
         .collect();
     let end = shown.len().saturating_sub(app.findings_scroll);
-    let start = end.saturating_sub(inner);
-    let lines: Vec<Line> = shown[start..end]
-        .iter()
-        .map(|x| {
-            Line::from(vec![
-                Span::styled(
-                    format!("{:<5}", x.level.label().trim()),
-                    Style::new().fg(colour(x.level)),
-                ),
-                Span::styled(
-                    format!("{:<14}", x.subject),
-                    Style::new().add_modifier(Modifier::BOLD),
-                ),
-                Span::raw(x.message.clone()),
-            ])
-        })
-        .collect();
+    // Walk back from the newest visible finding, taking whole findings for
+    // as long as their wrapped rows fit: the tail stays anchored and no
+    // message loses its own ending off the right edge.
+    let width = area.width.saturating_sub(2) as usize;
+    let mut lines: Vec<Line> = Vec::new();
+    let mut rows = 0;
+    for x in shown[..end].iter().rev() {
+        let line = Line::from(vec![
+            Span::styled(
+                format!("{:<5}", x.level.label().trim()),
+                Style::new().fg(colour(x.level)),
+            ),
+            Span::styled(
+                format!("{:<14}", x.subject),
+                Style::new().add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(x.message.clone()),
+        ]);
+        let need = term::wrapped_rows(&line, width.max(1));
+        if rows + need > inner && rows > 0 {
+            break;
+        }
+        rows += need;
+        lines.insert(0, line);
+        if rows >= inner {
+            break;
+        }
+    }
     let mut title = format!(
         "FINDINGS ({}){}",
         shown.len(),
@@ -2254,7 +2272,9 @@ fn render_findings(f: &mut Frame, app: &App, area: Rect) {
         title.push_str(&format!(" · ↓ {} newer", app.findings_scroll));
     }
     f.render_widget(
-        Paragraph::new(Text::from(lines)).block(Block::bordered().title(title)),
+        Paragraph::new(Text::from(lines))
+            .wrap(Wrap { trim: false })
+            .block(Block::bordered().title(title)),
         area,
     );
 }

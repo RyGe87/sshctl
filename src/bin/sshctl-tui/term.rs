@@ -433,6 +433,12 @@ fn wrap_chars(chars: &[(char, Style)], width: usize) -> Vec<Vec<(char, Style)>> 
     rows
 }
 
+/// How many rows a line takes when wrapped at `width` — the same walk the
+/// renderer makes, so counting and drawing can never disagree.
+pub fn wrapped_rows(line: &Line, width: usize) -> usize {
+    wrap_chars(&flatten(line), width).len()
+}
+
 impl Widget for Paragraph<'_> {
     fn render(self, area: Rect, frame: &mut Frame) {
         let inner = match &self.block {
