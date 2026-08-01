@@ -1,10 +1,32 @@
 version: 2
 updates:
+  # Routine crate bumps arrive as one weekly PR. Majors stay solo, and so do
+  # the pre-1.0 UI crates (eframe, ratatui): every 0.x step of theirs may
+  # break, and a breaking bump should never hide inside a batch PR.
   - package-ecosystem: cargo
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      cargo-compatible:
+        update-types:
+          - minor
+          - patch
+        exclude-patterns:
+          - eframe
+          - ratatui
+  # All GitHub Actions bumps in one weekly PR; the volume is low and CI plus
+  # an rc tag prove them out. The cooldown leaves day-one regressions in
+  # brand-new releases for upstream to fix.
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      github-actions:
+        patterns:
+          - "*"
