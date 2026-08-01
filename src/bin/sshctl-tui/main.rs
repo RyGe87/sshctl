@@ -1068,6 +1068,13 @@ impl App {
             Tab::Overview => {
                 if let Some(step) = list_step(key) {
                     self.selected = step_index(self.selected, step, self.source.hosts.len());
+                } else if key.code == KeyCode::Enter && !self.source.hosts.is_empty() {
+                    // The door from seeing to changing: same host, fields
+                    // ready. Overview itself still edits nothing.
+                    self.tab = Tab::Config;
+                    self.config_fields_focused = true;
+                    self.config_row = 0;
+                    self.detail_scroll = 0;
                 }
             }
             Tab::Config => self.config_key(key),
@@ -2280,7 +2287,6 @@ fn render_modal(f: &mut Frame, app: &App) {
                         Line::from("keys         manage the private keys"),
                         Line::from("known_hosts  manage the accepted server keys"),
                         Line::default(),
-                        Line::from(dim("             only overview cannot change anything")),
                         Line::from(dim("tab the keys · esc close")),
                     ],
                 )
@@ -2297,6 +2303,7 @@ fn render_modal(f: &mut Frame, app: &App) {
                         Line::from("R            reload"),
                         Line::from("q            quit"),
                         Line::default(),
+                        Line::from("overview     enter edit the selected host"),
                         Line::from("config       l/h in and out of the fields · enter edit"),
                         Line::from("             o add option · x drop option · p pick a hop"),
                         Line::from("             a add host · D remove host"),
