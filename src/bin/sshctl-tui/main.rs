@@ -12,12 +12,8 @@
 //! where egui had to *draw* its status dots because ● is missing from its
 //! font, a terminal just prints the character.
 
-use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Clear, Paragraph, Tabs, Wrap};
-use ratatui::{DefaultTerminal, Frame};
+mod term;
+
 use sshctl::doctor::{self, Finding, Level};
 use sshctl::effective::{self, Effective, Origin};
 use sshctl::fidelity::{self, Loss};
@@ -31,13 +27,18 @@ use std::io;
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, channel};
 use std::time::Duration;
+use term::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use term::{
+    Block, Clear, Color, Constraint, DefaultTerminal, Frame, Layout, Line, Modifier, Paragraph,
+    Rect, Span, Style, Tabs, Text, Wrap,
+};
 
 fn main() -> io::Result<()> {
     // Never start with leftovers from a previous session.
     model::wipe_work_files();
-    let terminal = ratatui::init();
+    let terminal = term::init();
     let result = App::new().run(terminal);
-    ratatui::restore();
+    term::restore();
     model::wipe_work_files();
     result
 }

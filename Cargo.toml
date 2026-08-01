@@ -23,10 +23,11 @@ exclude = ["/target", "*.png", "/.github", "/docs", "bundle-app.sh"]
 #   cargo install sshctl --all-features                        -> all three
 [features]
 default = ["tui"]
-# The CLI is dependency-free; the feature only switches the binary on.
+# The CLI and the TUI are dependency-free; their features only switch the
+# binaries on.
 cli = []
 gui = ["dep:eframe"]
-tui = ["dep:ratatui"]
+tui = []
 
 [[bin]]
 name = "sshctl"
@@ -40,14 +41,11 @@ required-features = ["gui"]
 
 [[bin]]
 name = "sshctl-tui"
-path = "src/bin/sshctl-tui.rs"
+path = "src/bin/sshctl-tui/main.rs"
 required-features = ["tui"]
 
 [dependencies]
 eframe = { version = "0.35.0", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"], optional = true }
-# Bare: no calendar widget, no underline-color, no macros — the TUI uses
-# five basic widgets and nothing else. Nineteen crates fewer.
-ratatui = { version = "0.30.2", optional = true, default-features = false, features = ["crossterm"] }
 
 # Size over speed everywhere: this tool waits on ssh, not on itself. The
 # combination roughly halves the TUI binary. panic = "abort" drops the
