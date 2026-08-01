@@ -372,17 +372,11 @@ pub fn delete(name: &str) -> Result<std::path::PathBuf, String> {
     Ok(target)
 }
 
-/// Permissions equal to those of ~/.ssh: private keys live in here. On
-/// Windows there is nothing to set — the profile directory is already the
-/// user's own.
-#[cfg(unix)]
+/// Permissions equal to those of ~/.ssh: private keys live in here.
 fn restrict_to_owner(dir: &Path) {
     use std::os::unix::fs::PermissionsExt;
     let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
 }
-
-#[cfg(not(unix))]
-fn restrict_to_owner(_dir: &Path) {}
 
 /// Looks for a name that does not exist yet, so that a second deletion does
 /// not overwrite the first.

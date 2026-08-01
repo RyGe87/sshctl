@@ -26,26 +26,15 @@ pub fn work_path() -> PathBuf {
 }
 
 pub fn home() -> PathBuf {
-    // Windows sets USERPROFILE and usually no HOME; panicking on the normal
-    // state of a supported platform is not an option.
     std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
         .map(PathBuf::from)
-        .expect("neither HOME nor USERPROFILE is set")
+        .expect("HOME is not set")
 }
 
-/// Permission bits of a file, or `None` where the notion does not exist.
-/// Windows has no Unix modes; inventing a number there would trip every
-/// checker that compares against 0o600.
-#[cfg(unix)]
+/// Permission bits of a file, or `None` when they cannot be read.
 pub fn mode_of(path: &Path) -> Option<u32> {
     use std::os::unix::fs::PermissionsExt;
     Some(std::fs::metadata(path).ok()?.permissions().mode() & 0o777)
-}
-
-#[cfg(not(unix))]
-pub fn mode_of(_path: &Path) -> Option<u32> {
-    None
 }
 
 /// Throws away all working files. Meant to run both on startup and on exit, so

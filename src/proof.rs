@@ -457,7 +457,6 @@ impl Drop for TempConfig {
     }
 }
 
-#[cfg(unix)]
 fn open_private(path: &PathBuf) -> Option<std::fs::File> {
     use std::os::unix::fs::OpenOptionsExt;
     std::fs::OpenOptions::new()
@@ -467,13 +466,6 @@ fn open_private(path: &PathBuf) -> Option<std::fs::File> {
         .mode(0o600)
         .open(path)
         .ok()
-}
-
-#[cfg(not(unix))]
-fn open_private(path: &PathBuf) -> Option<std::fs::File> {
-    // On Windows a file in the user's own temp directory is not readable by
-    // other users to begin with, and ssh does not check the mode there.
-    std::fs::File::create(path).ok()
 }
 
 /// Keeps two temporary files in the same process from colliding. Not a clock:

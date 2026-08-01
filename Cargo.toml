@@ -11,7 +11,7 @@ repository = "https://github.com/RyGe87/sshctl"
 homepage = "https://github.com/RyGe87/sshctl"
 keywords = ["ssh", "ssh-config", "known-hosts", "cli", "gui"]
 categories = ["command-line-utilities", "gui", "config"]
-exclude = ["/target", "*.png", "/.github", "/docs"]
+exclude = ["/target", "*.png", "/.github", "/docs", "bundle-app.sh"]
 
 # Three shells, one core. Each shell sits behind its own feature, so nobody
 # has to compile or download a byte more than the shell they want. The
@@ -45,7 +45,16 @@ required-features = ["tui"]
 
 [dependencies]
 eframe = { version = "0.35.0", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"], optional = true }
-ratatui = { version = "0.30.2", optional = true }
+# Bare: no calendar widget, no underline-color, no macros — the TUI uses
+# five basic widgets and nothing else. Nineteen crates fewer.
+ratatui = { version = "0.30.2", optional = true, default-features = false, features = ["crossterm"] }
 
+# Size over speed everywhere: this tool waits on ssh, not on itself. The
+# combination roughly halves the TUI binary. panic = "abort" drops the
+# unwinder; the panic message and the terminal restore still work.
 [profile.release]
 strip = true
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"

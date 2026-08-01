@@ -121,7 +121,6 @@ pub fn write_atomically(target: &std::path::Path, contents: &str) -> Result<(), 
 }
 
 /// 0600 straight away, so the file is never briefly readable by others.
-#[cfg(unix)]
 fn create_private(path: &std::path::Path) -> Result<std::fs::File, String> {
     use std::os::unix::fs::OpenOptionsExt;
     std::fs::OpenOptions::new()
@@ -131,11 +130,6 @@ fn create_private(path: &std::path::Path) -> Result<std::fs::File, String> {
         .mode(0o600)
         .open(path)
         .map_err(|e| format!("cannot create {}: {e}", path.display()))
-}
-
-#[cfg(not(unix))]
-fn create_private(path: &std::path::Path) -> Result<std::fs::File, String> {
-    std::fs::File::create(path).map_err(|e| format!("cannot create {}: {e}", path.display()))
 }
 
 #[cfg(test)]
