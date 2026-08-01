@@ -433,10 +433,14 @@ fn wrap_chars(chars: &[(char, Style)], width: usize) -> Vec<Vec<(char, Style)>> 
     rows
 }
 
-/// How many rows a line takes when wrapped at `width` — the same walk the
-/// renderer makes, so counting and drawing can never disagree.
-pub fn wrapped_rows(line: &Line, width: usize) -> usize {
-    wrap_chars(&flatten(line), width).len()
+/// Wraps plain text the way paragraphs wrap, and hands back the rows as
+/// strings — for callers that lay out their own hanging indents.
+pub fn wrap_text(text: &str, width: usize) -> Vec<String> {
+    let chars: Vec<(char, Style)> = text.chars().map(|c| (c, Style::default())).collect();
+    wrap_chars(&chars, width)
+        .into_iter()
+        .map(|row| row.into_iter().map(|(c, _)| c).collect())
+        .collect()
 }
 
 impl Widget for Paragraph<'_> {

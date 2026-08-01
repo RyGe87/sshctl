@@ -2237,28 +2237,40 @@ fn render_findings(f: &mut Frame, app: &App, area: Rect) {
     let end = shown.len().saturating_sub(app.findings_scroll);
     // Walk back from the newest visible finding, taking whole findings for
     // as long as their wrapped rows fit: the tail stays anchored and no
-    // message loses its own ending off the right edge.
+    // message loses its own ending off the right edge. Continuation rows
+    // hang under their own message column.
     let width = area.width.saturating_sub(2) as usize;
     let mut lines: Vec<Line> = Vec::new();
     let mut rows = 0;
     for x in shown[..end].iter().rev() {
-        let line = Line::from(vec![
-            Span::styled(
-                format!("{:<5}", x.level.label().trim()),
-                Style::new().fg(colour(x.level)),
-            ),
-            Span::styled(
-                format!("{:<14}", x.subject),
-                Style::new().add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(x.message.clone()),
-        ]);
-        let need = term::wrapped_rows(&line, width.max(1));
-        if rows + need > inner && rows > 0 {
+        let subject = format!("{:<14}", x.subject);
+        let indent = 5 + subject.chars().count();
+        let chunks = term::wrap_text(&x.message, width.saturating_sub(indent).max(8));
+        if rows + chunks.len() > inner && rows > 0 {
             break;
         }
-        rows += need;
-        lines.insert(0, line);
+        rows += chunks.len();
+        let block: Vec<Line> = chunks
+            .into_iter()
+            .enumerate()
+            .map(|(i, chunk)| {
+                if i == 0 {
+                    Line::from(vec![
+                        Span::styled(
+                            format!("{:<5}", x.level.label().trim()),
+                            Style::new().fg(colour(x.level)),
+                        ),
+                        Span::styled(subject.clone(), Style::new().add_modifier(Modifier::BOLD)),
+                        Span::raw(chunk),
+                    ])
+                } else {
+                    Line::from(Span::raw(format!("{:indent$}{chunk}", "")))
+                }
+            })
+            .collect();
+        for line in block.into_iter().rev() {
+            lines.insert(0, line);
+        }
         if rows >= inner {
             break;
         }
@@ -2272,9 +2284,7 @@ fn render_findings(f: &mut Frame, app: &App, area: Rect) {
         title.push_str(&format!(" · ↓ {} newer", app.findings_scroll));
     }
     f.render_widget(
-        Paragraph::new(Text::from(lines))
-            .wrap(Wrap { trim: false })
-            .block(Block::bordered().title(title)),
+        Paragraph::new(Text::from(lines)).block(Block::bordered().title(title)),
         area,
     );
 }
