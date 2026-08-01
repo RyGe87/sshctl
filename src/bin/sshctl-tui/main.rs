@@ -2268,17 +2268,19 @@ fn render_modal(f: &mut Frame, app: &App) {
     match &app.modal {
         Modal::None => {}
         Modal::Help { page } => {
+            // One label column, one verb each, one separator sign. The
+            // modals explain themselves at the moment of use, so the help
+            // only has to point.
             let (title, lines) = if *page == 0 {
                 (
                     "help 1/2 — the tabs",
                     vec![
-                        Line::from("overview     what ssh will really do, and where it"),
-                        Line::from("             comes from — the only tab that cannot"),
-                        Line::from("             change anything"),
-                        Line::from("config       a host's fields, options and hops"),
-                        Line::from("keys         the private keys behind your hosts"),
-                        Line::from("known_hosts  the server keys you have accepted, per name"),
+                        Line::from("overview     see what ssh really does, and why"),
+                        Line::from("config       edit a host: fields · options · hops"),
+                        Line::from("keys         manage the private keys"),
+                        Line::from("known_hosts  manage the accepted server keys"),
                         Line::default(),
+                        Line::from(dim("             only overview cannot change anything")),
                         Line::from(dim("tab the keys · esc close")),
                     ],
                 )
@@ -2286,28 +2288,27 @@ fn render_modal(f: &mut Frame, app: &App) {
                 (
                     "help 2/2 — the keys",
                     vec![
-                        Line::from("1-4 or tab   switch tab"),
-                        Line::from("j/k, arrows  move through lists"),
-                        Line::from("shift-j/k    scroll the detail pane"),
-                        Line::from("shift-↑/↓    scroll the findings (pgup/pgdn: by five)"),
-                        Line::from("C            check everything again"),
-                        Line::from("S            save — shows what changes, proves it with ssh -G"),
-                        Line::from("R            reload from disk (asks first when unsaved)"),
+                        Line::from("1-4 · tab    switch tab"),
+                        Line::from("j/k · ↑/↓    move through the lists"),
+                        Line::from("shift-j/k    scroll the detail"),
+                        Line::from("shift-↑/↓    scroll the findings"),
+                        Line::from("C            run the checks"),
+                        Line::from("S            save"),
+                        Line::from("R            reload"),
                         Line::from("q            quit"),
                         Line::default(),
-                        Line::from("config       l into the fields, h back · enter edit"),
+                        Line::from("config       l/h in and out of the fields · enter edit"),
                         Line::from("             o add option · x drop option · p pick a hop"),
                         Line::from("             a add host · D remove host"),
                         Line::from("keys         n new · c comment · H make host · d delete"),
                         Line::from("known_hosts  f fetch host · p pin · d remove"),
                         Line::default(),
-                        Line::from(dim("Copy with your terminal's own selection; nothing")),
-                        Line::from(dim("here touches the clipboard.")),
+                        Line::from(dim("             copy = your terminal's own selection")),
                         Line::from(dim("tab the tabs · esc close")),
                     ],
                 )
             };
-            modal_box(f, title, lines, 68);
+            modal_box(f, title, lines, 60);
         }
         Modal::ConfirmQuit => {
             modal_box(
