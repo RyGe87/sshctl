@@ -3,72 +3,218 @@
 //! `~/.ssh/config` is the single source of truth. There is no second file, and
 //! therefore no question about which of the two is right.
 
-use clap::{Parser, Subcommand};
 use sshctl::doctor::{self, Level};
 use sshctl::model::{self, Host, ssh_config_path};
 use sshctl::{effective, fidelity, generate, proof};
 use std::process::ExitCode;
 use std::time::Duration;
 
-#[derive(Parser)]
-#[command(
-    name = "sshctl",
-    version,
-    about = "Shows, checks and writes ~/.ssh/config"
-)]
-struct Cli {
-    #[command(subcommand)]
-    command: Commands,
+// The grammar is six commands and a handful of flags; parsing it by hand
+// keeps the whole CLI free of dependencies — see `print_diff` for the same
+// trade made small.
+
+const HELP: &str = "\
+Shows, checks and writes ~/.ssh/config
+
+Usage: sshctl <COMMAND>
+
+Commands:
+  list     Short table of your hosts
+  show     Shows your configuration tidied up, the way `write` would save it
+  write    Writes the tidied-up version back to ~/.ssh/config
+  doctor   Checks the configuration and actual reachability
+  explain  Shows what really applies to a host, and where it comes from
+  add      Adds a host and writes it out right away
+
+Options:
+  -h, --help     Print help
+  -V, --version  Print version
+
+`sshctl <command> --help` lists the flags of one command.
+";
+
+const HELP_WRITE: &str = "\
+Writes the tidied-up version back to ~/.ssh/config
+
+Usage: sshctl write [OPTIONS]
+
+Options:
+      --dry-run  Show the difference without writing anything
+      --force    Write even when the proof reports a change, or could not run
+  -h, --help     Print help
+";
+
+const HELP_DOCTOR: &str = "\
+Checks the configuration and actual reachability
+
+Usage: sshctl doctor [OPTIONS] [ALIAS]
+
+Arguments:
+  [ALIAS]  Limit to a single alias
+
+Options:
+      --offline            Skip the network and login tests
+      --timeout <SECONDS>  Seconds per connection attempt [default: 5]
+  -h, --help               Print help
+";
+
+const HELP_EXPLAIN: &str = "\
+Shows what really applies to a host, and where it comes from
+
+Usage: sshctl explain [OPTIONS] <ALIAS>
+
+Options:
+      --all   Also show the values that are simply ssh's own defaults
+  -h, --help  Print help
+";
+
+const HELP_ADD: &str = "\
+Adds a host and writes it out right away
+
+Usage: sshctl add --hostname <HOSTNAME> --user <USER> [OPTIONS] <ALIAS>
+
+Options:
+      --hostname <HOSTNAME>  The real address or IP
+      --user <USER>          The login name on that machine
+      --generate-key         Create a new ed25519 key without a passphrase
+      --group <GROUP>        Free-form group name, for readability
+      --comment <COMMENT>    Comment placed right above the block
+  -h, --help                 Print help
+";
+
+fn wants_help(rest: &[String]) -> bool {
+    rest.iter().any(|a| a == "-h" || a == "--help")
 }
 
-#[derive(Subcommand)]
-enum Commands {
-    /// Short table of your hosts.
-    List,
-    /// Shows your configuration tidied up, the way `write` would save it.
-    Show,
-    /// Writes the tidied-up version back to ~/.ssh/config.
-    Write {
-        /// Show the difference without writing anything.
-        #[arg(long)]
-        dry_run: bool,
-        /// Write even when the proof reports a change, or could not run.
-        #[arg(long)]
-        force: bool,
-    },
-    /// Checks the configuration and actual reachability.
-    Doctor {
-        /// Limit to a single alias.
-        alias: Option<String>,
-        /// Skip the network and login tests.
-        #[arg(long)]
-        offline: bool,
-        /// Seconds per connection attempt.
-        #[arg(long, default_value_t = 5)]
-        timeout: u64,
-    },
-    /// Shows what really applies to a host, and where it comes from.
-    Explain {
-        alias: String,
-        /// Also show the values that are simply ssh's own defaults.
-        #[arg(long)]
-        all: bool,
-    },
-    /// Adds a host and writes it out right away.
-    Add {
-        alias: String,
-        #[arg(long)]
-        hostname: String,
-        #[arg(long)]
-        user: String,
-        /// Create a new ed25519 key without a passphrase.
-        #[arg(long)]
-        generate_key: bool,
-        #[arg(long)]
-        group: Option<String>,
-        #[arg(long)]
-        comment: Option<String>,
-    },
+fn unexpected(what: &str) -> String {
+    format!("unexpected argument '{what}'\ntry 'sshctl --help'")
+}
+
+/// Splits `--flag=value` into the flag and its glued-on value.
+fn split_flag(arg: &str) -> (&str, Option<&str>) {
+    match arg.split_once('=') {
+        Some((flag, value)) if flag.starts_with("--") => (flag, Some(value)),
+        _ => (arg, None),
+    }
+}
+
+/// The value of a flag: either glued on with `=` or the next argument.
+fn flag_value<'a>(
+    flag: &str,
+    inline: Option<&'a str>,
+    it: &mut std::slice::Iter<'a, String>,
+) -> Result<&'a str, String> {
+    match inline {
+        Some(value) => Ok(value),
+        None => it
+            .next()
+            .map(String::as_str)
+            .ok_or_else(|| format!("{flag} needs a value\ntry 'sshctl --help'")),
+    }
+}
+
+/// `list` and `show` take nothing; saying so beats silently ignoring input.
+fn no_arguments(name: &str, about: &str, rest: &[String]) -> Result<Option<()>, String> {
+    if wants_help(rest) {
+        print!("{about}\n\nUsage: sshctl {name}\n");
+        return Ok(None);
+    }
+    match rest.first() {
+        None => Ok(Some(())),
+        Some(arg) => Err(unexpected(arg)),
+    }
+}
+
+fn parse_write(rest: &[String]) -> Result<Option<(bool, bool)>, String> {
+    if wants_help(rest) {
+        print!("{HELP_WRITE}");
+        return Ok(None);
+    }
+    let (mut dry_run, mut force) = (false, false);
+    for arg in rest {
+        match arg.as_str() {
+            "--dry-run" => dry_run = true,
+            "--force" => force = true,
+            other => return Err(unexpected(other)),
+        }
+    }
+    Ok(Some((dry_run, force)))
+}
+
+type DoctorArgs = (Option<String>, bool, u64);
+
+fn parse_doctor(rest: &[String]) -> Result<Option<DoctorArgs>, String> {
+    if wants_help(rest) {
+        print!("{HELP_DOCTOR}");
+        return Ok(None);
+    }
+    let (mut alias, mut offline, mut timeout) = (None, false, 5u64);
+    let mut it = rest.iter();
+    while let Some(arg) = it.next() {
+        let (flag, inline) = split_flag(arg);
+        match (flag, inline) {
+            ("--offline", None) => offline = true,
+            ("--timeout", _) => {
+                let value = flag_value("--timeout", inline, &mut it)?;
+                timeout = value
+                    .parse()
+                    .map_err(|_| format!("--timeout wants a number of seconds, not '{value}'"))?;
+            }
+            _ if !arg.starts_with('-') && alias.is_none() => alias = Some(arg.clone()),
+            _ => return Err(unexpected(arg)),
+        }
+    }
+    Ok(Some((alias, offline, timeout)))
+}
+
+fn parse_explain(rest: &[String]) -> Result<Option<(String, bool)>, String> {
+    if wants_help(rest) {
+        print!("{HELP_EXPLAIN}");
+        return Ok(None);
+    }
+    let (mut alias, mut all) = (None, false);
+    for arg in rest {
+        match arg.as_str() {
+            "--all" => all = true,
+            other if !other.starts_with('-') && alias.is_none() => alias = Some(other.to_string()),
+            other => return Err(unexpected(other)),
+        }
+    }
+    let alias = alias.ok_or("explain needs an alias\ntry 'sshctl explain --help'")?;
+    Ok(Some((alias, all)))
+}
+
+type AddArgs = (String, String, String, bool, Option<String>, Option<String>);
+
+fn parse_add(rest: &[String]) -> Result<Option<AddArgs>, String> {
+    if wants_help(rest) {
+        print!("{HELP_ADD}");
+        return Ok(None);
+    }
+    let (mut alias, mut hostname, mut user) = (None, None, None);
+    let (mut generate_key, mut group, mut comment) = (false, None, None);
+    let mut it = rest.iter();
+    while let Some(arg) = it.next() {
+        let (flag, inline) = split_flag(arg);
+        match (flag, inline) {
+            ("--hostname", _) => {
+                hostname = Some(flag_value("--hostname", inline, &mut it)?.to_string())
+            }
+            ("--user", _) => user = Some(flag_value("--user", inline, &mut it)?.to_string()),
+            ("--generate-key", None) => generate_key = true,
+            ("--group", _) => group = Some(flag_value("--group", inline, &mut it)?.to_string()),
+            ("--comment", _) => {
+                comment = Some(flag_value("--comment", inline, &mut it)?.to_string())
+            }
+            _ if !arg.starts_with('-') && alias.is_none() => alias = Some(arg.clone()),
+            _ => return Err(unexpected(arg)),
+        }
+    }
+    let missing = |what: &str| format!("add needs {what}\ntry 'sshctl add --help'");
+    let alias = alias.ok_or_else(|| missing("an alias"))?;
+    let hostname = hostname.ok_or_else(|| missing("--hostname"))?;
+    let user = user.ok_or_else(|| missing("--user"))?;
+    Ok(Some((alias, hostname, user, generate_key, group, comment)))
 }
 
 fn main() -> ExitCode {
@@ -86,24 +232,58 @@ fn main() -> ExitCode {
 }
 
 fn run() -> Result<ExitCode, String> {
-    match Cli::parse().command {
-        Commands::List => cmd_list(),
-        Commands::Show => cmd_show(),
-        Commands::Write { dry_run, force } => cmd_write(dry_run, force),
-        Commands::Doctor {
-            alias,
-            offline,
-            timeout,
-        } => cmd_doctor(alias, offline, timeout),
-        Commands::Explain { alias, all } => cmd_explain(alias, all),
-        Commands::Add {
-            alias,
-            hostname,
-            user,
-            generate_key,
-            group,
-            comment,
-        } => cmd_add(alias, hostname, user, generate_key, group, comment),
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let Some((command, rest)) = args.split_first() else {
+        print!("{HELP}");
+        return Ok(ExitCode::SUCCESS);
+    };
+    // Help printed = done; the `None` from a parser means exactly that.
+    macro_rules! parsed {
+        ($e:expr) => {
+            match $e? {
+                Some(value) => value,
+                None => return Ok(ExitCode::SUCCESS),
+            }
+        };
+    }
+    match command.as_str() {
+        "-h" | "--help" | "help" => {
+            print!("{HELP}");
+            Ok(ExitCode::SUCCESS)
+        }
+        "-V" | "--version" => {
+            println!("sshctl {}", env!("CARGO_PKG_VERSION"));
+            Ok(ExitCode::SUCCESS)
+        }
+        "list" => {
+            parsed!(no_arguments("list", "Short table of your hosts", rest));
+            cmd_list()
+        }
+        "show" => {
+            parsed!(no_arguments(
+                "show",
+                "Shows your configuration tidied up, the way `write` would save it",
+                rest
+            ));
+            cmd_show()
+        }
+        "write" => {
+            let (dry_run, force) = parsed!(parse_write(rest));
+            cmd_write(dry_run, force)
+        }
+        "doctor" => {
+            let (alias, offline, timeout) = parsed!(parse_doctor(rest));
+            cmd_doctor(alias, offline, timeout)
+        }
+        "explain" => {
+            let (alias, all) = parsed!(parse_explain(rest));
+            cmd_explain(alias, all)
+        }
+        "add" => {
+            let (alias, hostname, user, generate_key, group, comment) = parsed!(parse_add(rest));
+            cmd_add(alias, hostname, user, generate_key, group, comment)
+        }
+        other => Err(format!("unknown command '{other}'\ntry 'sshctl --help'")),
     }
 }
 

@@ -8,7 +8,6 @@
 //! one" can never arise: outside a running session there is simply only one
 //! file.
 
-use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 pub fn ssh_dir() -> PathBuf {
@@ -55,43 +54,35 @@ pub fn wipe_work_files() {
     let _ = std::fs::remove_file(work_path());
 }
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone)]
 pub struct Source {
-    #[serde(default)]
     pub defaults: Defaults,
     /// Order here = order in the file that gets written.
-    #[serde(default, rename = "host")]
     pub hosts: Vec<Host>,
     /// Lines sshctl does not understand and therefore must not rewrite either,
     /// such as `Match` or `Include` constructs. Kept so the checks can say what
     /// is being passed through untouched.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unsupported: Vec<String>,
     /// Raw lines that stood before the first `Host` block, exactly as written.
     ///
     /// Position matters in ssh: `Include` pulls a file in at the spot where it
     /// stands, and first value wins. So these are written back in the same
     /// place rather than tidied away somewhere.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub leading: Vec<String>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default)]
 pub struct Defaults {
-    #[serde(default)]
     pub add_keys_to_agent: bool,
     /// Only meaningful on macOS.
-    #[serde(default)]
     pub use_keychain: bool,
     /// Stops ssh from offering arbitrary agent keys and leaving you with a
     /// meaningless "Permission denied".
-    #[serde(default)]
     pub identities_only: bool,
-    #[serde(default)]
     pub server_alive_interval: u32,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default)]
 pub struct Host {
     /// The short name you type: `ssh unraid`.
     pub alias: String,
@@ -106,36 +97,27 @@ pub struct Host {
     /// `HostName web1` suddenly sends web2 to web1. And on `Host *.internal`
     /// it would literally produce `HostName *.internal`, which solves
     /// nothing.
-    #[serde(default)]
     pub hostname_explicit: bool,
     pub user: String,
     /// Filename inside ~/.ssh, or an absolute path.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub port: Option<u16>,
     /// Which machine(s) the connection jumps through. Multiple hops are
     /// comma-separated; every hop may be `user@host:port` and may also be an
     /// alias from this very file.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub proxy_jump: Option<String>,
     /// Extra names this block also matches on.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub aliases: Vec<String>,
     /// Raw ssh options that sshctl does not model itself, e.g.
     /// "HostKeyAlgorithms +ssh-rsa" for old equipment.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub options: Vec<String>,
     /// Free-form group name; purely for the readability of the file.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub group: Option<String>,
     /// Comment that sat right above the block; kept when rewriting.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub comment: Option<String>,
     /// Raw lines that followed this block and that sshctl does not model —
     /// a whole `Match` section, say. Written back here unchanged, because
     /// where they stand is part of what they mean.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub trailing: Vec<String>,
 }
 
@@ -240,6 +222,34 @@ pub fn expand(raw: &str) -> PathBuf {
     }
 }
 
+/// One `key = ["…", "…"]` line, or nothing at all for an empty list.
+fn toml_list(out: &mut String, key: &str, items: &[String]) {
+    if items.is_empty() {
+        return;
+    }
+    let quoted: Vec<String> = items.iter().map(|s| toml_string(s)).collect();
+    out.push_str(&format!("{key} = [{}]\n", quoted.join(", ")));
+}
+
+/// A TOML basic string: quotes, backslashes and control characters escaped.
+fn toml_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            '\r' => out.push_str("\\r"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04X}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
 impl Source {
     /// Writes the snapshot out. Fails silently: this file is a convenience,
     /// not state, so it must never hold up a session.
@@ -250,13 +260,55 @@ impl Source {
         {
             return;
         }
-        let Ok(body) = toml::to_string_pretty(self) else {
-            return;
-        };
         let header = "# Snapshot of what sshctl currently holds in memory.\n\
                       # Wiped on startup and on exit; only there to look at.\n\
                       # The real configuration is ~/.ssh/config.\n\n";
-        let _ = std::fs::write(&path, format!("{header}{body}"));
+        let _ = std::fs::write(&path, format!("{header}{}", self.snapshot()));
+    }
+
+    /// Renders the snapshot as TOML by hand. A serialisation library used to
+    /// do this, but nothing ever reads the file back — see `work_path` — and
+    /// fourteen crates was a steep price for one write-only convenience.
+    fn snapshot(&self) -> String {
+        let mut out = String::new();
+        // Root values have to stand before the first table to belong to it.
+        toml_list(&mut out, "unsupported", &self.unsupported);
+        toml_list(&mut out, "leading", &self.leading);
+        let d = &self.defaults;
+        out.push_str("[defaults]\n");
+        out.push_str(&format!("add_keys_to_agent = {}\n", d.add_keys_to_agent));
+        out.push_str(&format!("use_keychain = {}\n", d.use_keychain));
+        out.push_str(&format!("identities_only = {}\n", d.identities_only));
+        out.push_str(&format!(
+            "server_alive_interval = {}\n",
+            d.server_alive_interval
+        ));
+        for h in &self.hosts {
+            out.push_str("\n[[host]]\n");
+            out.push_str(&format!("alias = {}\n", toml_string(&h.alias)));
+            out.push_str(&format!("hostname = {}\n", toml_string(&h.hostname)));
+            out.push_str(&format!("hostname_explicit = {}\n", h.hostname_explicit));
+            out.push_str(&format!("user = {}\n", toml_string(&h.user)));
+            if let Some(key) = &h.key {
+                out.push_str(&format!("key = {}\n", toml_string(key)));
+            }
+            if let Some(port) = h.port {
+                out.push_str(&format!("port = {port}\n"));
+            }
+            if let Some(jump) = &h.proxy_jump {
+                out.push_str(&format!("proxy_jump = {}\n", toml_string(jump)));
+            }
+            toml_list(&mut out, "aliases", &h.aliases);
+            toml_list(&mut out, "options", &h.options);
+            if let Some(group) = &h.group {
+                out.push_str(&format!("group = {}\n", toml_string(group)));
+            }
+            if let Some(comment) = &h.comment {
+                out.push_str(&format!("comment = {}\n", toml_string(comment)));
+            }
+            toml_list(&mut out, "trailing", &h.trailing);
+        }
+        out
     }
 
     /// Duplicate aliases are silently fatal: ssh takes the first match and
