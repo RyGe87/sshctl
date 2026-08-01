@@ -2310,7 +2310,6 @@ fn render_modal(f: &mut Frame, app: &App) {
                         Line::from("keys         n new · c comment · H make host · d delete"),
                         Line::from("known_hosts  f fetch host · p pin · d remove"),
                         Line::default(),
-                        Line::from(dim("             copy = your terminal's own selection")),
                         Line::from(dim("tab → the tabs · esc close")),
                     ],
                 )
