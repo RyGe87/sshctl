@@ -868,6 +868,20 @@ fn csi_modifiers(params: &[u8]) -> KeyModifiers {
 }
 
 fn csi_key(final_byte: u8, params: &[u8]) -> Option<KeyEvent> {
+    // The rxvt family spells shift-arrows as lowercase finals, no params.
+    if let Some(code) = match final_byte {
+        b'a' => Some(KeyCode::Up),
+        b'b' => Some(KeyCode::Down),
+        b'c' => Some(KeyCode::Right),
+        b'd' => Some(KeyCode::Left),
+        _ => None,
+    } {
+        return Some(KeyEvent {
+            code,
+            modifiers: KeyModifiers::SHIFT,
+            kind: KeyEventKind::Press,
+        });
+    }
     let code = match final_byte {
         b'A' => KeyCode::Up,
         b'B' => KeyCode::Down,
@@ -1090,6 +1104,18 @@ mod tests {
                 key(KeyCode::Delete),
                 key(KeyCode::BackTab),
             ]
+        );
+    }
+
+    #[test]
+    fn rxvt_shift_arrows_speak_lowercase() {
+        assert_eq!(
+            keys(b"\x1b[a", true),
+            vec![KeyEvent {
+                code: KeyCode::Up,
+                modifiers: KeyModifiers::SHIFT,
+                kind: KeyEventKind::Press,
+            }]
         );
     }
 

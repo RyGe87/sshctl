@@ -1023,6 +1023,14 @@ impl App {
                 }
             }
             KeyCode::Char('?') => self.modal = Modal::Help { page: 0 },
+            // ctrl-u/d is the spelling every terminal delivers; shift-↑/↓
+            // works wherever the terminal actually transmits it.
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.findings_scroll = (self.findings_scroll + 1).min(self.findings_scroll_max());
+            }
+            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.findings_scroll = self.findings_scroll.saturating_sub(1);
+            }
             KeyCode::Up if key.modifiers.contains(KeyModifiers::SHIFT) => {
                 self.findings_scroll = (self.findings_scroll + 1).min(self.findings_scroll_max());
             }
@@ -2297,7 +2305,7 @@ fn render_modal(f: &mut Frame, app: &App) {
                         Line::from("1-4 · tab    switch tab"),
                         Line::from("j/k · ↑/↓    move through the lists"),
                         Line::from("shift-j/k    scroll the detail"),
-                        Line::from("shift-↑/↓    scroll the findings"),
+                        Line::from("ctrl-u/d     scroll the findings"),
                         Line::from("C            run the checks"),
                         Line::from("S            save"),
                         Line::from("R            reload"),
