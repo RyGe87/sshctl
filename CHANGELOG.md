@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 — 2026-08-01
 
 - Zero dependencies, everywhere: the terminal UI draws itself (raw mode
   from `stty`, keys from a thread reading `/dev/tty`, cells over plain
