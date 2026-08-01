@@ -1023,8 +1023,16 @@ impl App {
                 }
             }
             KeyCode::Char('?') => self.modal = Modal::Help { page: 0 },
-            // ctrl-u/d is the spelling every terminal delivers; shift-↑/↓
-            // works wherever the terminal actually transmits it.
+            // The left hand mirrors the right: j/k rest under the right
+            // index and middle finger, d/f under the left. Same fingers,
+            // same directions — D up like k, F down like j. ctrl-u/d and
+            // shift-↑/↓ stay as unspoken synonyms.
+            KeyCode::Char('D') => {
+                self.findings_scroll = (self.findings_scroll + 1).min(self.findings_scroll_max());
+            }
+            KeyCode::Char('F') => {
+                self.findings_scroll = self.findings_scroll.saturating_sub(1);
+            }
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.findings_scroll = (self.findings_scroll + 1).min(self.findings_scroll_max());
             }
@@ -1253,7 +1261,7 @@ impl App {
                     append: false,
                 };
             }
-            KeyCode::Char('D') => {
+            KeyCode::Char('X') => {
                 self.config_fields_focused = false;
                 self.remove_host();
             }
@@ -2305,7 +2313,7 @@ fn render_modal(f: &mut Frame, app: &App) {
                         Line::from("1-4 · tab    switch tab"),
                         Line::from("j/k · ↑/↓    move through the lists"),
                         Line::from("shift-j/k    scroll the detail"),
-                        Line::from("ctrl-u/d     scroll the findings"),
+                        Line::from("shift-d/f    scroll the findings"),
                         Line::from("C            run the checks"),
                         Line::from("S            save"),
                         Line::from("R            reload"),
@@ -2314,7 +2322,7 @@ fn render_modal(f: &mut Frame, app: &App) {
                         Line::from("overview     enter edit the selected host"),
                         Line::from("config       l/h in and out of the fields · enter edit"),
                         Line::from("             o add option · x drop option · p pick a hop"),
-                        Line::from("             a add host · D remove host"),
+                        Line::from("             a add host · X remove host"),
                         Line::from("keys         n new · c comment · H make host · d delete"),
                         Line::from("known_hosts  f fetch host · p pin · d remove"),
                         Line::default(),
