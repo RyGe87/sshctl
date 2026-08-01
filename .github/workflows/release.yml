@@ -21,7 +21,7 @@ jobs:
       # from bundle-app.sh stands and the build still succeeds.
       HAVE_SIGNING: ${{ secrets.APPLE_CERTIFICATE != '' }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
       - run: cargo build --release --all-features --target aarch64-apple-darwin
       - run: cargo build --release --all-features --target x86_64-apple-darwin
@@ -81,7 +81,7 @@ jobs:
         run: |
           ditto -c -k --keepParent target/sshctl.app sshctl-macos-app.zip
           tar -C dist -czf sshctl-macos-universal.tar.gz sshctl sshctl-gui sshctl-tui
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: macos
           path: |
@@ -91,14 +91,14 @@ jobs:
   linux:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: |
           sudo apt-get update
           sudo apt-get install -y libxkbcommon-dev libwayland-dev \
             libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
       - run: cargo build --release --all-features
       - run: tar -C target/release -czf sshctl-linux-x86_64.tar.gz sshctl sshctl-gui sshctl-tui
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: linux
           path: sshctl-linux-x86_64.tar.gz
@@ -106,13 +106,13 @@ jobs:
   windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: cargo build --release --all-features
       - run: >
           Compress-Archive
           -Path target/release/sshctl.exe, target/release/sshctl-gui.exe, target/release/sshctl-tui.exe
           -DestinationPath sshctl-windows-x86_64.zip
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: windows
           path: sshctl-windows-x86_64.zip
@@ -121,19 +121,19 @@ jobs:
     needs: [macos, linux, windows]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           merge-multiple: true
       - run: sha256sum *.tar.gz *.zip > SHA256SUMS
       # Linux and Windows have no notary; verifiable provenance is the
       # honest equivalent. `gh attestation verify <file> --owner RyGe87`
       # proves an artifact was built from this repository by this workflow.
-      - uses: actions/attest-build-provenance@v4
+      - uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
           subject-path: |
             *.tar.gz
             *.zip
-      - uses: softprops/action-gh-release@v3
+      - uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           generate_release_notes: true
           # A tag with a dash (v0.2.0-rc.1) is a trial run, not a release.
@@ -142,3 +142,27 @@ jobs:
             *.tar.gz
             *.zip
             SHA256SUMS
+
+  # crates.io comes last: a published version can never be taken back, so
+  # everything reversible has to have succeeded first. Auth is OIDC trusted
+  # publishing — no long-lived token exists anywhere.
+  crates:
+    needs: [publish]
+    # A tag with a dash is a trial run and must publish nothing.
+    if: ${{ !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The crate must claim the version the tag names, or this ships the
+      # wrong code under a right-looking number.
+      - run: |
+          V=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
+          test "v$V" = "$GITHUB_REF_NAME" || { echo "Cargo.toml says $V, tag says $GITHUB_REF_NAME"; exit 1; }
+      - id: auth
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
+      - run: cargo publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
