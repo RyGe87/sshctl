@@ -139,7 +139,9 @@ jobs:
       - env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          flags=(--title "$GITHUB_REF_NAME" --generate-notes --verify-tag)
+          # -R names the repository: this job never checks out, so gh has no
+          # git directory to infer it from.
+          flags=(-R "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes --verify-tag)
           case "$GITHUB_REF_NAME" in *-*) flags+=(--prerelease) ;; esac
           gh release create "$GITHUB_REF_NAME" "${flags[@]}" \
             *.tar.gz *.zip SHA256SUMS
