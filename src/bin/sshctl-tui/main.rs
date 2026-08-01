@@ -2254,7 +2254,7 @@ fn render_modal(f: &mut Frame, app: &App) {
                 Line::default(),
                 Line::from("1-4 or tab   switch tab"),
                 Line::from("j/k, arrows  move through lists"),
-                Line::from("J/K          scroll the detail pane"),
+                Line::from("shift-j/k    scroll the detail pane"),
                 Line::from("C            check everything again"),
                 Line::from("S            save — shows what changes, proves it with ssh -G"),
                 Line::from("R            reload from disk (asks first when unsaved)"),
