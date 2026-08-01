@@ -246,7 +246,9 @@ enum OptStage {
 
 enum Modal {
     None,
-    Help,
+    Help {
+        page: usize,
+    },
     ConfirmQuit,
     ConfirmReload,
     Save {
@@ -424,6 +426,12 @@ impl App {
             quit: false,
         };
         app.reload();
+        // A config with no hosts is the first run in every sense that
+        // matters: open on the help, and remember nothing anywhere. An
+        // unreadable config outranks it — that banner must not be covered.
+        if app.source.hosts.is_empty() && app.unreadable.is_none() {
+            app.modal = Modal::Help { page: 0 };
+        }
         app
     }
 
@@ -1014,7 +1022,7 @@ impl App {
                     self.say("~/.ssh/config read in again", Level::Ok);
                 }
             }
-            KeyCode::Char('?') => self.modal = Modal::Help,
+            KeyCode::Char('?') => self.modal = Modal::Help { page: 0 },
             KeyCode::Up if key.modifiers.contains(KeyModifiers::SHIFT) => {
                 self.findings_scroll = (self.findings_scroll + 1).min(self.findings_scroll_max());
             }
@@ -1247,7 +1255,15 @@ impl App {
     fn modal_key(&mut self, key: &KeyEvent) -> Option<Act> {
         match &mut self.modal {
             Modal::None => None,
-            Modal::Help | Modal::KeyMade { .. } => match key.code {
+            Modal::Help { page } => match key.code {
+                KeyCode::Tab | KeyCode::BackTab => {
+                    *page = 1 - *page;
+                    None
+                }
+                KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => Some(Act::Close),
+                _ => None,
+            },
+            Modal::KeyMade { .. } => match key.code {
                 KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => Some(Act::Close),
                 _ => None,
             },
@@ -2251,31 +2267,47 @@ fn modal_box(f: &mut Frame, title: &str, lines: Vec<Line<'static>>, width: u16) 
 fn render_modal(f: &mut Frame, app: &App) {
     match &app.modal {
         Modal::None => {}
-        Modal::Help => {
-            let lines = vec![
-                Line::from("overview shows what ssh will really do, and where it comes from."),
-                Line::from("config edits your hosts, keys your keys, known_hosts the ledger."),
-                Line::from("Only overview cannot change anything."),
-                Line::default(),
-                Line::from("1-4 or tab   switch tab"),
-                Line::from("j/k, arrows  move through lists"),
-                Line::from("shift-j/k    scroll the detail pane"),
-                Line::from("shift-↑/↓    scroll the findings (pgup/pgdn: five at a time)"),
-                Line::from("C            check everything again"),
-                Line::from("S            save — shows what changes, proves it with ssh -G"),
-                Line::from("R            reload from disk (asks first when unsaved)"),
-                Line::from("q            quit"),
-                Line::default(),
-                Line::from("config       l into the fields, h back · enter edit"),
-                Line::from("             o add option · x drop option · p pick a hop"),
-                Line::from("             a add host · D remove host"),
-                Line::from("keys         n new · c comment · H make host · d delete"),
-                Line::from("known_hosts  f fetch host · p pin · d remove"),
-                Line::default(),
-                Line::from(dim("Copy with your terminal's own selection; nothing here")),
-                Line::from(dim("touches the clipboard.")),
-            ];
-            modal_box(f, "help", lines, 68);
+        Modal::Help { page } => {
+            let (title, lines) = if *page == 0 {
+                (
+                    "help 1/2 — the tabs",
+                    vec![
+                        Line::from("overview     what ssh will really do, and where it"),
+                        Line::from("             comes from — the only tab that cannot"),
+                        Line::from("             change anything"),
+                        Line::from("config       a host's fields, options and hops"),
+                        Line::from("keys         the private keys behind your hosts"),
+                        Line::from("known_hosts  the server keys you have accepted, per name"),
+                        Line::default(),
+                        Line::from(dim("tab the keys · esc close")),
+                    ],
+                )
+            } else {
+                (
+                    "help 2/2 — the keys",
+                    vec![
+                        Line::from("1-4 or tab   switch tab"),
+                        Line::from("j/k, arrows  move through lists"),
+                        Line::from("shift-j/k    scroll the detail pane"),
+                        Line::from("shift-↑/↓    scroll the findings (pgup/pgdn: by five)"),
+                        Line::from("C            check everything again"),
+                        Line::from("S            save — shows what changes, proves it with ssh -G"),
+                        Line::from("R            reload from disk (asks first when unsaved)"),
+                        Line::from("q            quit"),
+                        Line::default(),
+                        Line::from("config       l into the fields, h back · enter edit"),
+                        Line::from("             o add option · x drop option · p pick a hop"),
+                        Line::from("             a add host · D remove host"),
+                        Line::from("keys         n new · c comment · H make host · d delete"),
+                        Line::from("known_hosts  f fetch host · p pin · d remove"),
+                        Line::default(),
+                        Line::from(dim("Copy with your terminal's own selection; nothing")),
+                        Line::from(dim("here touches the clipboard.")),
+                        Line::from(dim("tab the tabs · esc close")),
+                    ],
+                )
+            };
+            modal_box(f, title, lines, 68);
         }
         Modal::ConfirmQuit => {
             modal_box(
