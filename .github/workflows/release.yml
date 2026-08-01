@@ -133,15 +133,16 @@ jobs:
           subject-path: |
             *.tar.gz
             *.zip
-      - uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
-        with:
-          generate_release_notes: true
-          # A tag with a dash (v0.2.0-rc.1) is a trial run, not a release.
-          prerelease: ${{ contains(github.ref_name, '-') }}
-          files: |
-            *.tar.gz
-            *.zip
-            SHA256SUMS
+      # The gh CLI is part of the runner image: publishing a release needs no
+      # third-party action. A tag with a dash (v0.2.0-rc.1) is a trial run,
+      # not a release.
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          flags=(--title "$GITHUB_REF_NAME" --generate-notes --verify-tag)
+          case "$GITHUB_REF_NAME" in *-*) flags+=(--prerelease) ;; esac
+          gh release create "$GITHUB_REF_NAME" "${flags[@]}" \
+            *.tar.gz *.zip SHA256SUMS
 
   # crates.io comes last: a published version can never be taken back, so
   # everything reversible has to have succeeded first. Auth is OIDC trusted
