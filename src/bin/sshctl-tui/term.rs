@@ -25,18 +25,29 @@ pub enum Color {
 }
 
 impl Color {
-    /// Palette slot, sent as `38;5;N` — the same bytes crossterm sent.
-    /// The classic `31`-style codes name the same slots on paper, but
-    /// Terminal.app and friends colour the two forms from different tables,
-    /// and the eye notices. Byte-for-byte equal is the only equal.
-    fn slot(self) -> &'static str {
+    /// The classic codes, deliberately. crossterm sent `38;5;N` palette
+    /// slots, which name the same colours on paper — but Terminal.app and
+    /// friends colour the two forms from different tables, and side by side
+    /// the classic table is the one that stays readable. Chosen by eye.
+    fn fg_code(self) -> &'static str {
         match self {
-            Color::Red => "1",
-            Color::Green => "2",
-            Color::Yellow => "3",
-            Color::Blue => "4",
-            Color::Cyan => "6",
-            Color::DarkGray => "8",
+            Color::Red => "31",
+            Color::Green => "32",
+            Color::Yellow => "33",
+            Color::Blue => "34",
+            Color::Cyan => "36",
+            Color::DarkGray => "90",
+        }
+    }
+
+    fn bg_code(self) -> &'static str {
+        match self {
+            Color::Red => "41",
+            Color::Green => "42",
+            Color::Yellow => "43",
+            Color::Blue => "44",
+            Color::Cyan => "46",
+            Color::DarkGray => "100",
         }
     }
 }
@@ -97,18 +108,18 @@ impl Style {
     }
 
     fn sgr(self) -> String {
-        let mut codes: Vec<String> = vec!["0".to_string()];
+        let mut codes: Vec<&str> = vec!["0"];
         if self.modifiers.contains(Modifier::BOLD) {
-            codes.push("1".to_string());
+            codes.push("1");
         }
         if self.modifiers.contains(Modifier::REVERSED) {
-            codes.push("7".to_string());
+            codes.push("7");
         }
         if let Some(fg) = self.fg {
-            codes.push(format!("38;5;{}", fg.slot()));
+            codes.push(fg.fg_code());
         }
         if let Some(bg) = self.bg {
-            codes.push(format!("48;5;{}", bg.slot()));
+            codes.push(bg.bg_code());
         }
         format!("\x1b[{}m", codes.join(";"))
     }
@@ -1075,14 +1086,16 @@ mod tests {
         assert_eq!(keys(b"\x1b[1;5A", true), vec![key(KeyCode::Up)]);
     }
 
+    /// The classic table beat crossterm's `38;5;N` slots in a side-by-side;
+    /// this pins the winner so nobody "fixes" it back.
     #[test]
-    fn colours_travel_as_palette_slots_like_crossterm_sent_them() {
+    fn colours_travel_as_the_classic_codes_the_eye_chose() {
         let style = Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD);
-        assert_eq!(style.sgr(), "\x1b[0;1;38;5;6m");
+        assert_eq!(style.sgr(), "\x1b[0;1;36m");
         let dim = Style::new().fg(Color::DarkGray);
-        assert_eq!(dim.sgr(), "\x1b[0;38;5;8m");
+        assert_eq!(dim.sgr(), "\x1b[0;90m");
         let tab = Style::new().add_modifier(Modifier::BOLD).bg(Color::Blue);
-        assert_eq!(tab.sgr(), "\x1b[0;1;48;5;4m");
+        assert_eq!(tab.sgr(), "\x1b[0;1;44m");
     }
 
     #[test]
