@@ -12,12 +12,8 @@
 //! where egui had to *draw* its status dots because ● is missing from its
 //! font, a terminal just prints the character.
 
-use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Clear, Paragraph, Tabs, Wrap};
-use ratatui::{DefaultTerminal, Frame};
+mod term;
+
 use sshctl::doctor::{self, Finding, Level};
 use sshctl::effective::{self, Effective, Origin};
 use sshctl::fidelity::{self, Loss};
@@ -31,13 +27,18 @@ use std::io;
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, channel};
 use std::time::Duration;
+use term::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use term::{
+    Block, Clear, Color, Constraint, DefaultTerminal, Frame, Layout, Line, Modifier, Paragraph,
+    Rect, Span, Style, Tabs, Text, Wrap,
+};
 
 fn main() -> io::Result<()> {
     // Never start with leftovers from a previous session.
     model::wipe_work_files();
-    let terminal = ratatui::init();
+    let terminal = term::init();
     let result = App::new().run(terminal);
-    ratatui::restore();
+    term::restore();
     model::wipe_work_files();
     result
 }
@@ -245,7 +246,9 @@ enum OptStage {
 
 enum Modal {
     None,
-    Help,
+    Help {
+        page: usize,
+    },
     ConfirmQuit,
     ConfirmReload,
     Save {
@@ -371,6 +374,8 @@ struct App {
 
     findings: Vec<Finding>,
     findings_scroll: usize,
+    /// How many lines of the detail pane are scrolled out at the top.
+    detail_scroll: usize,
     checking: bool,
     doctor_rx: Option<Receiver<Msg>>,
     proof_rx: Option<Receiver<proof::SaveJudgement>>,
@@ -409,6 +414,7 @@ impl App {
             entry_sel: 0,
             findings: Vec::new(),
             findings_scroll: 0,
+            detail_scroll: 0,
             checking: false,
             doctor_rx: None,
             proof_rx: None,
@@ -420,6 +426,12 @@ impl App {
             quit: false,
         };
         app.reload();
+        // A config with no hosts is the first run in every sense that
+        // matters: open on the help, and remember nothing anywhere. An
+        // unreadable config outranks it — that banner must not be covered.
+        if app.source.hosts.is_empty() && app.unreadable.is_none() {
+            app.modal = Modal::Help { page: 0 };
+        }
         app
     }
 
@@ -968,6 +980,16 @@ impl App {
             }
             return;
         }
+        // A new subject starts at the top: switching tab or selection
+        // rewinds the detail scroll. Except in the config field list, where
+        // j/k walks the detail itself.
+        let switches_subject = matches!(key.code, KeyCode::Tab | KeyCode::BackTab)
+            || matches!(key.code, KeyCode::Char(c) if ('1'..='4').contains(&c))
+            || (list_step(&key).is_some()
+                && !(self.tab == Tab::Config && self.config_fields_focused));
+        if switches_subject {
+            self.detail_scroll = 0;
+        }
         match key.code {
             KeyCode::Char('q') => {
                 if self.dirty {
@@ -990,6 +1012,13 @@ impl App {
                     self.refresh_key_detail();
                 }
             }
+            KeyCode::BackTab => {
+                let i = TABS.iter().position(|t| *t == self.tab).unwrap_or(0);
+                self.tab = TABS[(i + TABS.len() - 1) % TABS.len()];
+                if self.tab == Tab::Keys {
+                    self.refresh_key_detail();
+                }
+            }
             KeyCode::Char('C') => self.start_check(),
             KeyCode::Char('S') => self.open_save_preview(),
             KeyCode::Char('R') => {
@@ -1000,10 +1029,60 @@ impl App {
                     self.say("~/.ssh/config read in again", Level::Ok);
                 }
             }
-            KeyCode::Char('?') => self.modal = Modal::Help,
-            KeyCode::PageUp => self.findings_scroll += 5,
+            KeyCode::Char('?') => self.modal = Modal::Help { page: 0 },
+            // The left hand mirrors the right: j/k rest under the right
+            // index and middle finger, d/f under the left. Same fingers,
+            // same directions — D up like k, F down like j. ctrl-u/d and
+            // shift-↑/↓ stay as unspoken synonyms.
+            KeyCode::Char('D') => {
+                self.findings_scroll = (self.findings_scroll + 1).min(self.findings_scroll_max());
+            }
+            KeyCode::Char('F') => {
+                self.findings_scroll = self.findings_scroll.saturating_sub(1);
+            }
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.findings_scroll = (self.findings_scroll + 1).min(self.findings_scroll_max());
+            }
+            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.findings_scroll = self.findings_scroll.saturating_sub(1);
+            }
+            KeyCode::Up if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                self.findings_scroll = (self.findings_scroll + 1).min(self.findings_scroll_max());
+            }
+            KeyCode::Down if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                self.findings_scroll = self.findings_scroll.saturating_sub(1);
+            }
+            KeyCode::PageUp => {
+                self.findings_scroll = (self.findings_scroll + 5).min(self.findings_scroll_max());
+            }
             KeyCode::PageDown => self.findings_scroll = self.findings_scroll.saturating_sub(5),
+            KeyCode::Char('J') => {
+                let bottom = self.detail_line_count().saturating_sub(1);
+                self.detail_scroll = (self.detail_scroll + 1).min(bottom);
+            }
+            KeyCode::Char('K') => self.detail_scroll = self.detail_scroll.saturating_sub(1),
             _ => self.tab_key(&key),
+        }
+    }
+
+    /// The furthest the findings can scroll back: the same filter the
+    /// renderer applies, so the clamp and the view agree.
+    fn findings_scroll_max(&self) -> usize {
+        self.findings
+            .iter()
+            .filter(|x| x.subject != "orphan")
+            .count()
+            .saturating_sub(1)
+    }
+
+    /// How many lines the detail pane currently holds, for clamping the
+    /// scroll to something that exists.
+    fn detail_line_count(&self) -> usize {
+        match self.tab {
+            Tab::Overview => overview_lines(self).len(),
+            Tab::Config => config_lines(self).len(),
+            Tab::Keys => key_lines(self).len(),
+            Tab::Known => known_lines(self).len(),
         }
     }
 
@@ -1012,6 +1091,13 @@ impl App {
             Tab::Overview => {
                 if let Some(step) = list_step(key) {
                     self.selected = step_index(self.selected, step, self.source.hosts.len());
+                } else if key.code == KeyCode::Enter && !self.source.hosts.is_empty() {
+                    // The door from seeing to changing: same host, fields
+                    // ready. Overview itself still edits nothing.
+                    self.tab = Tab::Config;
+                    self.config_fields_focused = true;
+                    self.config_row = 0;
+                    self.detail_scroll = 0;
                 }
             }
             Tab::Config => self.config_key(key),
@@ -1182,7 +1268,7 @@ impl App {
                     append: false,
                 };
             }
-            KeyCode::Char('D') => {
+            KeyCode::Char('X') => {
                 self.config_fields_focused = false;
                 self.remove_host();
             }
@@ -1199,7 +1285,15 @@ impl App {
     fn modal_key(&mut self, key: &KeyEvent) -> Option<Act> {
         match &mut self.modal {
             Modal::None => None,
-            Modal::Help | Modal::KeyMade { .. } => match key.code {
+            Modal::Help { page } => match key.code {
+                KeyCode::Tab | KeyCode::BackTab => {
+                    *page = 1 - *page;
+                    None
+                }
+                KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => Some(Act::Close),
+                _ => None,
+            },
+            Modal::KeyMade { .. } => match key.code {
                 KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => Some(Act::Close),
                 _ => None,
             },
@@ -1530,8 +1624,12 @@ impl App {
     }
 }
 
-/// j/k and the arrow keys, as one notion.
+/// j/k and the arrow keys, as one notion. Only bare ones: a modifier means
+/// the key is talking to another pane.
 fn list_step(key: &KeyEvent) -> Option<isize> {
+    if key.modifiers != KeyModifiers::NONE {
+        return None;
+    }
     match key.code {
         KeyCode::Up | KeyCode::Char('k') => Some(-1),
         KeyCode::Down | KeyCode::Char('j') => Some(1),
@@ -1623,7 +1721,6 @@ fn ui(f: &mut Frame, app: &App) {
     rows.push(Constraint::Min(6)); // main
     rows.push(Constraint::Length(8)); // findings
     rows.push(Constraint::Length(1)); // toast
-    rows.push(Constraint::Length(1)); // key bar
     let areas = Layout::vertical(rows).split(f.area());
 
     // Title line.
@@ -1654,6 +1751,20 @@ fn ui(f: &mut Frame, app: &App) {
             .highlight_style(Style::new().add_modifier(Modifier::BOLD).bg(Color::Blue)),
         areas[1],
     );
+    // Everything the old bottom bar said lives behind ?, so this is the
+    // whole signpost. It yields the moment the tabs need the room.
+    let tabs_width: u16 = TABS.iter().map(|t| t.title().len() as u16 + 3).sum::<u16>() - 1;
+    let hint = "? help";
+    let hint_width = hint.len() as u16;
+    if areas[1].width >= tabs_width + hint_width + 2 {
+        let corner = Rect {
+            x: areas[1].x + areas[1].width - hint_width,
+            y: areas[1].y,
+            width: hint_width,
+            height: 1,
+        };
+        f.render_widget(Paragraph::new(Line::from(dim(hint))), corner);
+    }
 
     if let Some(why) = &app.unreadable {
         f.render_widget(
@@ -1694,42 +1805,7 @@ fn ui(f: &mut Frame, app: &App) {
             areas[6],
         );
     }
-    f.render_widget(Paragraph::new(Line::from(dim(key_bar(app)))), areas[7]);
-
     render_modal(f, app);
-}
-
-fn key_bar(app: &App) -> String {
-    if !matches!(app.modal, Modal::None) {
-        return match &app.modal {
-            Modal::Save { outcome, .. } => match save_blocked(outcome) {
-                _ if outcome.is_none() => "esc cancel".to_string(),
-                None => "w write · esc cancel".to_string(),
-                Some(_) => "f arm override · w write anyway · esc cancel".to_string(),
-            },
-            Modal::ScanHost { .. } => "enter fetch · a add to known_hosts · esc close".to_string(),
-            Modal::PickHop { .. } => "enter pick · ctrl-a toggle append · esc close".to_string(),
-            Modal::AddHost { .. } => {
-                "tab next field · space toggle key · enter add · esc cancel".to_string()
-            }
-            _ => "enter confirm · esc cancel".to_string(),
-        };
-    }
-    let common = "1-4 tabs · C check · S save · R reload · ? help · q quit";
-    match app.tab {
-        Tab::Overview => format!("j/k host · {common}"),
-        Tab::Config => {
-            if app.config_fields_focused {
-                format!(
-                    "j/k row · enter edit · o option · p hop · x drop option · D remove host · h back · {common}"
-                )
-            } else {
-                format!("j/k host · l fields · a add host · {common}")
-            }
-        }
-        Tab::Keys => format!("j/k key · n new · c comment · H make host · d delete · {common}"),
-        Tab::Known => format!("j/k entry · f fetch host · p pin · d remove · {common}"),
-    }
 }
 
 fn render_list(f: &mut Frame, app: &App, area: Rect) {
@@ -1816,12 +1892,18 @@ fn render_list(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn render_detail(f: &mut Frame, app: &App, area: Rect) {
-    let lines = match app.tab {
+    let mut lines = match app.tab {
         Tab::Overview => overview_lines(app),
         Tab::Config => config_lines(app),
         Tab::Keys => key_lines(app),
         Tab::Known => known_lines(app),
     };
+    // J/K scroll by whole lines; the clamp keeps the last one in view.
+    let skip = app.detail_scroll.min(lines.len().saturating_sub(1));
+    if skip > 0 {
+        lines.drain(..skip);
+        lines.insert(0, Line::from(dim(format!("↑ {skip} more"))));
+    }
     f.render_widget(
         Paragraph::new(Text::from(lines))
             .wrap(Wrap { trim: false })
@@ -1860,17 +1942,14 @@ fn overview_lines(app: &App) -> Vec<Line<'static>> {
             Style::new().add_modifier(Modifier::BOLD),
         )),
         Line::default(),
-        header("1  WHICH RULES APPLY"),
+        header("1 WHICH RULES APPLY"),
     ];
     match &app.effective {
         Some(e) if !e.matching_blocks.is_empty() => {
             for b in &e.matching_blocks {
                 let mut spans = vec![Span::raw(format!("  Host {}", b.patterns.join(" ")))];
                 if b.source_file.starts_with("/etc/") {
-                    spans.push(warn_span(format!(
-                        "   {} — not in your own file",
-                        b.source_file
-                    )));
+                    spans.push(warn_span(format!("   {} — system-wide", b.source_file)));
                 } else {
                     spans.push(dim(format!("   {}", b.source_file)));
                 }
@@ -1896,7 +1975,7 @@ fn overview_lines(app: &App) -> Vec<Line<'static>> {
             .map(|s| s.origin.clone())
     };
     out.push(Line::default());
-    out.push(header("2  WHERE TO"));
+    out.push(header("2 WHERE TO"));
     out.push(row(
         "Hostname",
         &value("hostname"),
@@ -1918,7 +1997,7 @@ fn overview_lines(app: &App) -> Vec<Line<'static>> {
         out.push(row("Which way", &way, None));
     }
     out.push(Line::default());
-    out.push(header("3  WHO AM I"));
+    out.push(header("3 WHO AM I"));
     out.push(row("User", &value("user"), origin("user").as_ref()));
     let key_name = host.key.clone().unwrap_or_default();
     out.push(row("Key", &key_name, origin("identityfile").as_ref()));
@@ -1939,7 +2018,7 @@ fn overview_lines(app: &App) -> Vec<Line<'static>> {
         )));
     }
     out.push(Line::default());
-    out.push(header("4  WHO IS THE DESTINATION"));
+    out.push(header("4 WHO IS THE DESTINATION"));
     if app.known_types.is_empty() {
         out.push(Line::from(warn_span(
             "  Not in known_hosts — the first connection will ask for trust.",
@@ -1964,9 +2043,7 @@ fn overview_lines(app: &App) -> Vec<Line<'static>> {
         let invisible = e.invisible();
         if !invisible.is_empty() {
             out.push(Line::default());
-            out.push(Line::from(warn_span(
-                "APPLIES WITHOUT BEING IN YOUR OWN FILE",
-            )));
+            out.push(Line::from(warn_span("SYSTEM-WIDE")));
             for s in invisible {
                 out.push(Line::from(vec![
                     Span::raw(format!("  {} {}", s.keyword, s.value)),
@@ -2158,28 +2235,54 @@ fn render_findings(f: &mut Frame, app: &App, area: Rect) {
         .filter(|x| x.subject != "orphan")
         .collect();
     let end = shown.len().saturating_sub(app.findings_scroll);
-    let start = end.saturating_sub(inner);
-    let lines: Vec<Line> = shown[start..end]
-        .iter()
-        .map(|x| {
-            Line::from(vec![
-                Span::styled(
-                    format!("{:<5}", x.level.label().trim()),
-                    Style::new().fg(colour(x.level)),
-                ),
-                Span::styled(
-                    format!("{:<14}", x.subject),
-                    Style::new().add_modifier(Modifier::BOLD),
-                ),
-                Span::raw(x.message.clone()),
-            ])
-        })
-        .collect();
-    let title = format!(
+    // Walk back from the newest visible finding, taking whole findings for
+    // as long as their wrapped rows fit: the tail stays anchored and no
+    // message loses its own ending off the right edge. Continuation rows
+    // hang under their own message column.
+    let width = area.width.saturating_sub(2) as usize;
+    let mut lines: Vec<Line> = Vec::new();
+    let mut rows = 0;
+    for x in shown[..end].iter().rev() {
+        let subject = format!("{:<14}", x.subject);
+        let indent = 5 + subject.chars().count();
+        let chunks = term::wrap_text(&x.message, width.saturating_sub(indent).max(8));
+        if rows + chunks.len() > inner && rows > 0 {
+            break;
+        }
+        rows += chunks.len();
+        let block: Vec<Line> = chunks
+            .into_iter()
+            .enumerate()
+            .map(|(i, chunk)| {
+                if i == 0 {
+                    Line::from(vec![
+                        Span::styled(
+                            format!("{:<5}", x.level.label().trim()),
+                            Style::new().fg(colour(x.level)),
+                        ),
+                        Span::styled(subject.clone(), Style::new().add_modifier(Modifier::BOLD)),
+                        Span::raw(chunk),
+                    ])
+                } else {
+                    Line::from(Span::raw(format!("{:indent$}{chunk}", "")))
+                }
+            })
+            .collect();
+        for line in block.into_iter().rev() {
+            lines.insert(0, line);
+        }
+        if rows >= inner {
+            break;
+        }
+    }
+    let mut title = format!(
         "FINDINGS ({}){}",
         shown.len(),
         if app.checking { " · checking…" } else { "" }
     );
+    if app.findings_scroll > 0 {
+        title.push_str(&format!(" · ↓ {} newer", app.findings_scroll));
+    }
     f.render_widget(
         Paragraph::new(Text::from(lines)).block(Block::bordered().title(title)),
         area,
@@ -2212,22 +2315,47 @@ fn modal_box(f: &mut Frame, title: &str, lines: Vec<Line<'static>>, width: u16) 
 fn render_modal(f: &mut Frame, app: &App) {
     match &app.modal {
         Modal::None => {}
-        Modal::Help => {
-            let lines = vec![
-                Line::from("The first tab is for looking, the other three change things."),
-                Line::default(),
-                Line::from("1-4 or tab   switch tab"),
-                Line::from("j/k, arrows  move through lists"),
-                Line::from("C            check everything again"),
-                Line::from("S            save — shows what changes, proves it with ssh -G"),
-                Line::from("R            reload from disk (asks first when unsaved)"),
-                Line::from("pgup/pgdn    scroll the findings"),
-                Line::from("q            quit"),
-                Line::default(),
-                Line::from(dim("Copy with your terminal's own selection; nothing here")),
-                Line::from(dim("touches the clipboard.")),
-            ];
-            modal_box(f, "help", lines, 68);
+        Modal::Help { page } => {
+            // One label column, one verb each, one separator sign. The
+            // modals explain themselves at the moment of use, so the help
+            // only has to point.
+            let (title, lines) = if *page == 0 {
+                (
+                    "help 1/2 — the tabs",
+                    vec![
+                        Line::from("overview     see what ssh really does, and why"),
+                        Line::from("config       edit a host: fields · options · hops"),
+                        Line::from("keys         manage the private keys"),
+                        Line::from("known_hosts  manage the accepted server keys"),
+                        Line::default(),
+                        Line::from(dim("tab → the keys · esc close")),
+                    ],
+                )
+            } else {
+                (
+                    "help 2/2 — the keys",
+                    vec![
+                        Line::from("1-4 · tab    switch tab"),
+                        Line::from("j/k · ↑/↓    move through the lists"),
+                        Line::from("shift-j/k    scroll the detail"),
+                        Line::from("shift-d/f    scroll the findings"),
+                        Line::from("C            run the checks"),
+                        Line::from("S            save"),
+                        Line::from("R            reload"),
+                        Line::from("q            quit"),
+                        Line::default(),
+                        Line::from("overview     enter edit the selected host"),
+                        Line::from("config       l/h in and out of the fields · enter edit"),
+                        Line::from("             o add option · x drop option · p pick a hop"),
+                        Line::from("             a add host · X remove host"),
+                        Line::from("keys         n new · c comment · H make host · d delete"),
+                        Line::from("known_hosts  f fetch host · p pin · d remove"),
+                        Line::default(),
+                        Line::from(dim("tab → the tabs · esc close")),
+                    ],
+                )
+            };
+            modal_box(f, title, lines, 60);
         }
         Modal::ConfirmQuit => {
             modal_box(
@@ -2415,6 +2543,11 @@ fn render_modal(f: &mut Frame, app: &App) {
                     "[ ] I know — write anyway (press f to arm)"
                 })));
             }
+            lines.push(Line::from(dim(match save_blocked(outcome) {
+                _ if outcome.is_none() => "esc cancel",
+                None => "w write · esc cancel",
+                Some(_) => "f arm override · w write anyway · esc cancel",
+            })));
             modal_box(f, "save to ~/.ssh/config", lines, 76);
         }
         Modal::EditField { field, input } => {

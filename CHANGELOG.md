@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- The terminal UI draws itself: raw mode from `stty`, keys from a thread
+  reading `/dev/tty`, cells over plain ANSI — the default install now
+  counts zero dependencies. A tip of the hat to the
+  [ratatui](https://ratatui.rs) project, whose API shape the new module
+  deliberately mirrors and whose crate served sshctl 0.2 and 0.3 well.
+- The panes scroll: shift-j/k moves through the detail, shift-↑/↓ (or
+  pgup/pgdn, five at a time) through the findings. Both know where to
+  stop, and both say how much sits beyond the fold.
+
 ## 0.3.0 — 2026-07-31
 
 - The terminal UI is the default shell: `cargo install sshctl` now builds
