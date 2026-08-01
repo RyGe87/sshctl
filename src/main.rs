@@ -530,7 +530,7 @@ fn cmd_explain(alias: String, all: bool) -> Result<ExitCode, String> {
     }
     for b in &eff.matching_blocks {
         let mark = if b.source_file.starts_with("/etc/") {
-            "   <- not in your own file"
+            "   <- system-wide"
         } else {
             ""
         };
@@ -564,7 +564,7 @@ fn cmd_explain(alias: String, all: bool) -> Result<ExitCode, String> {
 
     let invisible = eff.invisible();
     if !invisible.is_empty() {
-        println!("\nAPPLIES WITHOUT BEING IN YOUR OWN FILE");
+        println!("\nSYSTEM-WIDE — NOT IN YOUR FILE");
         for s in invisible {
             println!("   {} {}   <- {}", s.keyword, s.value, s.origin.describe());
         }

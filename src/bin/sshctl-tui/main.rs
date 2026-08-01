@@ -1942,10 +1942,7 @@ fn overview_lines(app: &App) -> Vec<Line<'static>> {
             for b in &e.matching_blocks {
                 let mut spans = vec![Span::raw(format!("  Host {}", b.patterns.join(" ")))];
                 if b.source_file.starts_with("/etc/") {
-                    spans.push(warn_span(format!(
-                        "   {} — not in your own file",
-                        b.source_file
-                    )));
+                    spans.push(warn_span(format!("   {} — system-wide", b.source_file)));
                 } else {
                     spans.push(dim(format!("   {}", b.source_file)));
                 }
@@ -2039,9 +2036,7 @@ fn overview_lines(app: &App) -> Vec<Line<'static>> {
         let invisible = e.invisible();
         if !invisible.is_empty() {
             out.push(Line::default());
-            out.push(Line::from(warn_span(
-                "APPLIES WITHOUT BEING IN YOUR OWN FILE",
-            )));
+            out.push(Line::from(warn_span("SYSTEM-WIDE — NOT IN YOUR FILE")));
             for s in invisible {
                 out.push(Line::from(vec![
                     Span::raw(format!("  {} {}", s.keyword, s.value)),
