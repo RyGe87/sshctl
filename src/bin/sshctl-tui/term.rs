@@ -5,6 +5,10 @@
 //! platform the way the whole tool does: `stty` puts the terminal in raw
 //! mode and reports its size, ANSI sequences do the drawing, and a thread
 //! reading `/dev/tty` turns bytes into keys. Unix only, like the rest.
+//!
+//! A tip of the hat to ratatui: the API shape here deliberately mirrors
+//! theirs, and their crate served sshctl 0.2 and 0.3 well. It left because
+//! this house wants zero dependencies, not because it fell short.
 
 use std::collections::VecDeque;
 use std::io::{Read, Write};

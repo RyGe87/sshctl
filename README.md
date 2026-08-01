@@ -74,7 +74,9 @@ tells the same truth.
 Four tabs — the first for looking, the other three for changing — in plain
 characters, for the places a window cannot follow: over ssh, in tmux, on the
 machine with no screen — which is usually the machine whose config has been
-lying the longest.
+lying the longest. It draws itself — raw mode via `stty`, keys from the tty,
+plain ANSI — with no crates underneath; its API shape tips its hat to
+[ratatui](https://ratatui.rs), which served sshctl 0.2 and 0.3 well.
 
 ```text
 sshctl   /home/you/.ssh/config
