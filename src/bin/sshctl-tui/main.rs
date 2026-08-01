@@ -1675,7 +1675,6 @@ fn ui(f: &mut Frame, app: &App) {
     rows.push(Constraint::Min(6)); // main
     rows.push(Constraint::Length(8)); // findings
     rows.push(Constraint::Length(1)); // toast
-    rows.push(Constraint::Length(1)); // key bar
     let areas = Layout::vertical(rows).split(f.area());
 
     // Title line.
@@ -1706,6 +1705,20 @@ fn ui(f: &mut Frame, app: &App) {
             .highlight_style(Style::new().add_modifier(Modifier::BOLD).bg(Color::Blue)),
         areas[1],
     );
+    // Everything the old bottom bar said lives behind ?, so this is the
+    // whole signpost. It yields the moment the tabs need the room.
+    let tabs_width: u16 = TABS.iter().map(|t| t.title().len() as u16 + 3).sum::<u16>() - 1;
+    let hint = "? help";
+    let hint_width = hint.len() as u16;
+    if areas[1].width >= tabs_width + hint_width + 2 {
+        let corner = Rect {
+            x: areas[1].x + areas[1].width - hint_width,
+            y: areas[1].y,
+            width: hint_width,
+            height: 1,
+        };
+        f.render_widget(Paragraph::new(Line::from(dim(hint))), corner);
+    }
 
     if let Some(why) = &app.unreadable {
         f.render_widget(
@@ -1746,42 +1759,7 @@ fn ui(f: &mut Frame, app: &App) {
             areas[6],
         );
     }
-    f.render_widget(Paragraph::new(Line::from(dim(key_bar(app)))), areas[7]);
-
     render_modal(f, app);
-}
-
-fn key_bar(app: &App) -> String {
-    if !matches!(app.modal, Modal::None) {
-        return match &app.modal {
-            Modal::Save { outcome, .. } => match save_blocked(outcome) {
-                _ if outcome.is_none() => "esc cancel".to_string(),
-                None => "w write · esc cancel".to_string(),
-                Some(_) => "f arm override · w write anyway · esc cancel".to_string(),
-            },
-            Modal::ScanHost { .. } => "enter fetch · a add to known_hosts · esc close".to_string(),
-            Modal::PickHop { .. } => "enter pick · ctrl-a toggle append · esc close".to_string(),
-            Modal::AddHost { .. } => {
-                "tab next field · space toggle key · enter add · esc cancel".to_string()
-            }
-            _ => "enter confirm · esc cancel".to_string(),
-        };
-    }
-    let common = "1-4 tabs · C check · S save · R reload · ? help · q quit";
-    match app.tab {
-        Tab::Overview => format!("j/k host · {common}"),
-        Tab::Config => {
-            if app.config_fields_focused {
-                format!(
-                    "j/k row · enter edit · o option · p hop · x drop option · D remove host · h back · {common}"
-                )
-            } else {
-                format!("j/k host · l fields · a add host · {common}")
-            }
-        }
-        Tab::Keys => format!("j/k key · n new · c comment · H make host · d delete · {common}"),
-        Tab::Known => format!("j/k entry · f fetch host · p pin · d remove · {common}"),
-    }
 }
 
 fn render_list(f: &mut Frame, app: &App, area: Rect) {
@@ -2286,6 +2264,12 @@ fn render_modal(f: &mut Frame, app: &App) {
                 Line::from("R            reload from disk (asks first when unsaved)"),
                 Line::from("q            quit"),
                 Line::default(),
+                Line::from("config       l into the fields, h back · enter edit"),
+                Line::from("             o add option · x drop option · p pick a hop"),
+                Line::from("             a add host · D remove host"),
+                Line::from("keys         n new · c comment · H make host · d delete"),
+                Line::from("known_hosts  f fetch host · p pin · d remove"),
+                Line::default(),
                 Line::from(dim("Copy with your terminal's own selection; nothing here")),
                 Line::from(dim("touches the clipboard.")),
             ];
@@ -2477,6 +2461,11 @@ fn render_modal(f: &mut Frame, app: &App) {
                     "[ ] I know — write anyway (press f to arm)"
                 })));
             }
+            lines.push(Line::from(dim(match save_blocked(outcome) {
+                _ if outcome.is_none() => "esc cancel",
+                None => "w write · esc cancel",
+                Some(_) => "f arm override · w write anyway · esc cancel",
+            })));
             modal_box(f, "save to ~/.ssh/config", lines, 76);
         }
         Modal::EditField { field, input } => {
