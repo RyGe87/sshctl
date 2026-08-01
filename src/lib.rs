@@ -1,4 +1,4 @@
-//! The core of sshctl, shared by the CLI and the GUI.
+//! The core of sshctl, shared by the CLI and the terminal UI.
 //!
 //! `~/.ssh/config` is the single source of truth. The chain is:
 //!

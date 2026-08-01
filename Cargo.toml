@@ -3,30 +3,28 @@ name = "sshctl"
 version = "0.3.0"
 edition = "2024"
 rust-version = "1.88"
-description = "Show, check and safely rewrite ~/.ssh/config, with a TUI (the default), a CLI and a GUI on one core. It proves a rewrite changes nothing by asking ssh -G, instead of guessing from the text."
+description = "Show, check and safely rewrite ~/.ssh/config, with a TUI (the default) and a CLI on one core. It proves a rewrite changes nothing by asking ssh -G, instead of guessing from the text. Zero dependencies."
 authors = ["Geert Rymenants"]
 license = "MIT"
 readme = "README.md"
 repository = "https://github.com/RyGe87/sshctl"
 homepage = "https://github.com/RyGe87/sshctl"
-keywords = ["ssh", "ssh-config", "known-hosts", "cli", "gui"]
-categories = ["command-line-utilities", "gui", "config"]
-exclude = ["/target", "*.png", "/.github", "/docs", "bundle-app.sh"]
+keywords = ["ssh", "ssh-config", "known-hosts", "cli", "tui"]
+categories = ["command-line-utilities", "config"]
+exclude = ["/target", "*.png", "/.github", "/docs"]
 
-# Three shells, one core. Each shell sits behind its own feature, so nobody
+# Two shells, one core. Each shell sits behind its own feature, so nobody
 # has to compile or download a byte more than the shell they want. The
 # terminal UI is the default: it is the shell that works everywhere — over
-# ssh, in tmux, on machines without a screen — and the cheapest to build.
+# ssh, in tmux, on machines without a screen. Neither shell, nor the core,
+# has a single dependency.
 #   cargo install sshctl                                       -> the TUI
 #   cargo install sshctl --features cli                        -> + the CLI
 #   cargo install sshctl --no-default-features --features cli  -> only the CLI
-#   cargo install sshctl --all-features                        -> all three
 [features]
 default = ["tui"]
-# The CLI and the TUI are dependency-free; their features only switch the
-# binaries on.
+# The features only switch the binaries on; there is nothing to pull in.
 cli = []
-gui = ["dep:eframe"]
 tui = []
 
 [[bin]]
@@ -35,17 +33,9 @@ path = "src/main.rs"
 required-features = ["cli"]
 
 [[bin]]
-name = "sshctl-gui"
-path = "src/bin/sshctl-gui.rs"
-required-features = ["gui"]
-
-[[bin]]
 name = "sshctl-tui"
 path = "src/bin/sshctl-tui/main.rs"
 required-features = ["tui"]
-
-[dependencies]
-eframe = { version = "0.35.0", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"], optional = true }
 
 # Size over speed everywhere: this tool waits on ssh, not on itself. The
 # combination roughly halves the TUI binary. panic = "abort" drops the

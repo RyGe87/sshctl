@@ -17,27 +17,23 @@ jobs:
   macos:
     runs-on: macos-latest
     env:
-      # Signing needs the secrets below; without them the ad-hoc signature
-      # from bundle-app.sh stands and the build still succeeds.
+      # Signing needs the secrets below; without them the plain build still
+      # succeeds and ships unsigned.
       HAVE_SIGNING: ${{ secrets.APPLE_CERTIFICATE != '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
       - run: cargo build --release --all-features --target aarch64-apple-darwin
       - run: cargo build --release --all-features --target x86_64-apple-darwin
-      - name: universal binaries and app bundle
+      - name: universal binaries
         run: |
           mkdir -p dist
           lipo -create -output dist/sshctl \
             target/aarch64-apple-darwin/release/sshctl \
             target/x86_64-apple-darwin/release/sshctl
-          lipo -create -output dist/sshctl-gui \
-            target/aarch64-apple-darwin/release/sshctl-gui \
-            target/x86_64-apple-darwin/release/sshctl-gui
           lipo -create -output dist/sshctl-tui \
             target/aarch64-apple-darwin/release/sshctl-tui \
             target/x86_64-apple-darwin/release/sshctl-tui
-          BIN=dist/sshctl-gui ./bundle-app.sh
       - name: sign and notarize
         if: env.HAVE_SIGNING == 'true'
         env:
@@ -63,41 +59,25 @@ jobs:
             | grep -om1 '"Developer ID Application: [^"]*"' | tr -d '"')
           echo "signing as $IDENT"
           codesign --force --options runtime --timestamp --keychain "$KC" \
-            --sign "$IDENT" dist/sshctl dist/sshctl-gui dist/sshctl-tui
-          codesign --force --options runtime --timestamp --keychain "$KC" \
-            --sign "$IDENT" target/sshctl.app
-          # Notarize the app and the bare binaries; staple the app so the
-          # approval also holds offline (bare Mach-O files cannot be stapled).
-          ditto -c -k --keepParent target/sshctl.app app-submit.zip
-          zip -j bins-submit.zip dist/sshctl dist/sshctl-gui dist/sshctl-tui
-          xcrun notarytool submit app-submit.zip --wait \
-            --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$NOTARY_PASSWORD"
+            --sign "$IDENT" dist/sshctl dist/sshctl-tui
+          # Notarize the bare binaries; Mach-O files cannot be stapled, so
+          # the approval is looked up online on first run.
+          zip -j bins-submit.zip dist/sshctl dist/sshctl-tui
           xcrun notarytool submit bins-submit.zip --wait \
             --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$NOTARY_PASSWORD"
-          xcrun stapler staple target/sshctl.app
-          # Gatekeeper's own verdict gates the release: no pass, no assets.
-          spctl -a -vv target/sshctl.app
       - name: package
-        run: |
-          ditto -c -k --keepParent target/sshctl.app sshctl-macos-app.zip
-          tar -C dist -czf sshctl-macos-universal.tar.gz sshctl sshctl-gui sshctl-tui
+        run: tar -C dist -czf sshctl-macos-universal.tar.gz sshctl sshctl-tui
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: macos
-          path: |
-            sshctl-macos-universal.tar.gz
-            sshctl-macos-app.zip
+          path: sshctl-macos-universal.tar.gz
 
   linux:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - run: |
-          sudo apt-get update
-          sudo apt-get install -y libxkbcommon-dev libwayland-dev \
-            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
       - run: cargo build --release --all-features
-      - run: tar -C target/release -czf sshctl-linux-x86_64.tar.gz sshctl sshctl-gui sshctl-tui
+      - run: tar -C target/release -czf sshctl-linux-x86_64.tar.gz sshctl sshctl-tui
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: linux

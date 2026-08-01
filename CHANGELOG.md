@@ -2,14 +2,27 @@
 
 ## Unreleased
 
-- The terminal UI draws itself: raw mode from `stty`, keys from a thread
-  reading `/dev/tty`, cells over plain ANSI — the default install now
-  counts zero dependencies. A tip of the hat to the
-  [ratatui](https://ratatui.rs) project, whose API shape the new module
-  deliberately mirrors and whose crate served sshctl 0.2 and 0.3 well.
-- The panes scroll: shift-j/k moves through the detail, shift-↑/↓ (or
-  pgup/pgdn, five at a time) through the findings. Both know where to
-  stop, and both say how much sits beyond the fold.
+- Zero dependencies, everywhere: the terminal UI draws itself (raw mode
+  from `stty`, keys from a thread reading `/dev/tty`, cells over plain
+  ANSI), the CLI parses its own arguments, and the snapshot writes its own
+  TOML. A tip of the hat to the [ratatui](https://ratatui.rs) project,
+  whose API shape the new terminal layer deliberately mirrors and whose
+  crate served sshctl 0.2 and 0.3 well.
+- The panes scroll: shift-j/k moves through the detail, shift-d/f through
+  the findings — the left hand mirroring the right. Both know where to
+  stop and say how much sits beyond the fold, and long findings wrap under
+  their own message column. Remove host moved from D to X, next to the
+  small x that drops an option.
+- Help grew two pages — the tabs, then the keys — and opens by itself on a
+  config with no hosts. The bottom key bar retired in favour of `?` in the
+  corner, enter in overview jumps to config for the selected host, and
+  shift-tab cycles the tabs backwards.
+- The GUI retired at v0.3.0, in favour of the terminal UI; the native
+  Windows build retired there too — WSL runs the Linux build. Releases now
+  ship macOS and Linux, sign and notarize the bare binaries, and publish
+  with the gh CLI: no third-party actions left in the pipeline.
+- Release binaries roughly halved: the profile chooses size over speed,
+  because this tool waits on ssh, not on itself.
 
 ## 0.3.0 — 2026-07-31
 

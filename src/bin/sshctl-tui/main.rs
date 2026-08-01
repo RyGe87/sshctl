@@ -1,16 +1,14 @@
-//! Terminal shell on the same core as the CLI and the GUI.
+//! Terminal shell on the same core as the CLI.
 //!
-//! Three shells, one library: nothing in here knows ssh. What this shell
+//! Two shells, one library: nothing in here knows ssh. What this shell
 //! adds is a place to *work* where a window cannot follow: over ssh, in
 //! tmux, on the machine with no screen — which is usually the machine whose
 //! config has been lying the longest.
 //!
-//! The shape mirrors the GUI deliberately, tab for tab and modal for modal.
-//! Same four tabs, same rule that the first is for looking and the other
-//! three are for changing, same save screen with its two separate questions.
-//! Where the GUI needs a thread and a repaint, this event loop simply polls;
-//! where egui had to *draw* its status dots because ● is missing from its
-//! font, a terminal just prints the character.
+//! The shape is inherited from the GUI this tool carried until 0.3.0, tab
+//! for tab and modal for modal: four tabs of which the first only looks,
+//! and a save screen with its two separate questions. The window retired;
+//! its shape proved worth keeping.
 
 mod term;
 
@@ -791,8 +789,8 @@ impl App {
         let Some(host) = self.source.hosts.get_mut(self.selected) else {
             return;
         };
-        // Same rule as the GUI: a repeatable keyword accumulates, any other
-        // replaces its earlier line — ssh only reads the first.
+        // A repeatable keyword accumulates; any other replaces its earlier
+        // line — ssh only reads the first.
         let keyword = line
             .split_whitespace()
             .next()

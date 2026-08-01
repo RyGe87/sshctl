@@ -26,12 +26,6 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # eframe needs the X11/Wayland client headers to build on Linux.
-      - if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libxkbcommon-dev libwayland-dev \
-            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
       - run: cargo fmt --check
       # All features: the default build is the TUI alone, but CI answers for
       # every shell.

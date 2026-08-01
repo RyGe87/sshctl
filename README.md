@@ -5,7 +5,7 @@
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 Show, check and update your SSH configuration, tidied up — with a terminal
-UI, a CLI and a window on the same core. The terminal UI is the default
+UI and a CLI on one core, and zero dependencies. The terminal UI is the default
 shell: it is the one that works everywhere, including over ssh on the very
 machines you are managing. And nothing is ever written back until `ssh -G`
 has proved that the rewrite changes nothing about any connection.
@@ -21,18 +21,17 @@ key was refused.
 ## Install
 
 Prebuilt binaries are on the
-[releases page](https://github.com/RyGe87/sshctl/releases): macOS (universal,
-with a ready-made `sshctl.app`) and Linux (x86_64), each archive holding all
-three shells — `sshctl-tui`, `sshctl` and `sshctl-gui`. The macOS app and
-binaries are signed with a Developer ID and notarized by Apple, so they open
-like any other program. On Windows, the Linux build under WSL is the way to
-run sshctl; the last native build (v0.3.0) stays downloadable, unmaintained.
+[releases page](https://github.com/RyGe87/sshctl/releases): macOS (universal)
+and Linux (x86_64), each archive holding both shells — `sshctl-tui` and
+`sshctl`. The macOS binaries are signed with a Developer ID and notarized by
+Apple, so they open like any other program. On Windows, the Linux build under
+WSL is the way to run sshctl. The last release with a native Windows build
+and with the GUI is v0.3.0; both stay downloadable, unmaintained.
 
 Homebrew is the short route:
 
 ```sh
-brew install ryge87/tap/sshctl           # the three shells' binaries
-brew install --cask ryge87/tap/sshctl    # the macOS app, into /Applications
+brew install ryge87/tap/sshctl           # both shells' binaries
 ```
 
 With Rust installed there is `cargo install sshctl`, which builds the
@@ -44,7 +43,6 @@ nobody compiles a byte more than they want:
 cargo install sshctl                                       # the TUI
 cargo install sshctl --features cli                        # + the CLI
 cargo install sshctl --no-default-features --features cli  # only the CLI
-cargo install sshctl --all-features                        # all three
 ```
 
 ### What it needs
@@ -64,10 +62,10 @@ build-provenance attestation.
 from this repository by GitHub's own runners, and `SHA256SUMS` lists every
 checksum.
 
-## The three shells
+## The two shells
 
-One core, three faces — pick by situation, not by feature set: every shell
-tells the same truth.
+One core, two faces — pick by situation, not by feature set: both shells
+tell the same truth.
 
 ### The terminal UI — the default
 
@@ -80,26 +78,40 @@ plain ANSI — with no crates underneath; its API shape tips its hat to
 
 ```text
 sshctl   /home/you/.ssh/config
-  overview  │  config  │  keys  │  known_hosts
+  overview  │  config  │  keys  │  known_hosts                         ? help
 ┌HOSTS───────────────┐┌─────────────────────────────────────────────────────┐
 │● github.com        ││github.com                                           │
-│● gitlab.com        ││1  WHICH RULES APPLY                                 │
+│● gitlab.com        ││1 WHICH RULES APPLY                                  │
 │                    ││  Host github.com    ~/.ssh/config                   │
-│                    ││  Host *   /etc/ssh/ssh_config — not in your own file│
-│                    ││2  WHERE TO                                          │
+│                    ││  Host *   /etc/ssh/ssh_config — system-wide         │
+│                    ││2 WHERE TO                                           │
 │                    ││  Hostname   github.com   the block 'Host github.com'│
 │                    ││  Port       22           ssh's own default          │
 └────────────────────┘└─────────────────────────────────────────────────────┘
 ┌FINDINGS (2)───────────────────────────────────────────────────────────────┐
 │NOTE github.com   no IdentityFile — ssh will then try arbitrary agent keys │
 └───────────────────────────────────────────────────────────────────────────┘
- j/k host · 1-4 tabs · C check · S save · R reload · ? help · q quit
 ```
 
-The keys are on the screen, and `?` lists the rest. `S` opens the save
-screen with its two separate questions — the same screen the GUI has, with
-the same proof and the same rule that an unproved write takes a deliberate
-override.
+`?` holds every key, two pages worth. The four tabs:
+
+- **overview** — every host as **the stages of a connection**: which rules
+  apply, where to, who you are, who the destination is — with behind every
+  value where it comes from, system-wide settings included. Nothing here
+  changes your files; `enter` jumps to config for the selected host.
+- **config** — add, edit and remove hosts; pick extra options by intent
+  ("I want reopening to be faster" leads you to `ControlMaster`) instead of
+  by name.
+- **keys** — *all* private keys in `~/.ssh`, not only the problems. A key no
+  host uses can become a host with one key, and you can make or remove a key
+  from here.
+- **known_hosts** — the ledger next to your config: show an entry, remove
+  one, or add one after checking its fingerprint.
+
+The check runs the moment you open it — when you open the lid you want to
+know how your network is doing, not go looking for a button first. `S` opens
+the save screen with its two separate questions, and an unproved write takes
+a deliberate override.
 
 ### The CLI
 
@@ -115,57 +127,17 @@ sshctl explain unraid        # what really applies, and where it comes from
 sshctl add work --hostname work.example.com --user you --generate-key
 ```
 
-### The GUI
-
-![The overview tab: one host as the stages of a connection, with behind every value where it comes from](docs/screenshot.png)
-
-```sh
-./bundle-app.sh --install     # puts sshctl.app in /Applications
-```
-
-After that you start it from Spotlight. The window has four tabs, and the
-guiding rule is that **the first tab is for looking, the other three are for
-changing**:
-
-- **Overview** — every host as **the stages of a connection**: which rules
-  apply, where to, which way, as whom, trust, encryption, and what happens
-  afterwards, with behind every value where it comes from. The later stages
-  stay collapsed as long as everything is ssh's own default, so an ordinary
-  host takes a few lines and a complicated one points you straight at where the
-  complication sits. Nothing here changes your files.
-- **config** — add, edit and remove hosts; pick extra options by intent
-  ("I want reopening to be faster" leads you to `ControlMaster`) instead of by
-  name.
-- **keys** — *all* private keys in `~/.ssh`, not only the problems. A key no
-  host uses can become a host in one click, and you can make or remove a key
-  from here.
-- **known_hosts** — the ledger next to your config: show an entry, remove one,
-  or add one after checking its fingerprint.
-
-The check runs the moment you open it — when you open the lid you want to know
-how your network is doing, not go looking for a button first.
-
 Saving first shows the difference, and then asks `ssh -G` two separate
-questions — in the background, while the window stays alive. *Does the rewrite
-itself change anything?* is the safety gate: a difference there blocks, with
-an explicit override. *What do your own edits change?* is information you
-asked for by editing: it is listed, and one click writes it. Keeping the two
-apart is what saves the alarm from crying wolf on every deliberate edit. It
-also warns if the file has changed outside the app in the meantime, and puts
-a backup next to the original.
+questions — in the background, while the screen stays alive. *Does the
+rewrite itself change anything?* is the safety gate: a difference there
+blocks, with an explicit override. *What do your own edits change?* is
+information you asked for by editing: it is listed, and one key writes it.
+Keeping the two apart is what saves the alarm from crying wolf on every
+deliberate edit. It also warns if the file has changed outside the app in
+the meantime, and puts a backup next to the original.
 
-Two things that determine the shape:
-
-- **The slow work runs on separate threads** and trickles in: the checks, the
-  reading of the ledger, and the `ssh -G` proof behind the save screen. One
-  dead host costs seconds; the window must not look frozen for that long.
-- **The GUI holds no logic of its own about ssh.** Everything comes from the
-  same library as the CLI and the terminal UI, so the three shells cannot
-  possibly drift apart.
-
-One detail that might surprise you: the status dots are drawn rather than set
-as a character. The round symbols `●` and `○` are missing from egui's default
-font and would show up as empty boxes.
+sshctl carried a GUI until v0.3.0; it retired in favour of the terminal UI
+and stays downloadable there, unmaintained.
 
 ## How it works
 
@@ -308,7 +280,7 @@ not in your head, so key and host can no longer drift apart.
 ## Building
 
 ```sh
-cargo build --release --all-features   # all three shells
+cargo build --release --all-features   # both shells
 cargo test --all-features              # every test in the library
 ```
 
@@ -317,10 +289,10 @@ Structure: `src/lib.rs` is the core, with `parser` (config → model),
 `fidelity` (which lines does the parser not hold on to?), `keys` (which key
 belongs to which host), `known` (the ledger), `pattern` (Host patterns),
 `catalog` (the settings you can pick), `proxy` (jump chains), `effective`
-(`ssh -G` + provenance) and `doctor`. `src/main.rs` is the CLI,
-`src/bin/sshctl-gui.rs` the GUI, `src/bin/sshctl-tui.rs` the terminal UI.
-No shell knows anything about ssh of its own, so the three cannot drift
-apart.
+(`ssh -G` + provenance) and `doctor`. `src/main.rs` is the CLI;
+`src/bin/sshctl-tui/` is the terminal UI, with its own terminal layer in
+`term.rs` — raw mode, keys and cells, no crates. No shell knows anything
+about ssh of its own, so the two cannot drift apart.
 
 ```text
   ~/.ssh/config  --parser-->  Source  --generate-->  ~/.ssh/config
@@ -333,7 +305,7 @@ apart.
 
 ## Status
 
-Early days: three shells on one core, and every fix carries a test — but it
+Early days: two shells on one core, and every fix carries a test — but it
 has not yet been through many hands. Treat `write` with the healthy suspicion
 it treats your file — there is always a backup as `config.before-sshctl`, and
 it refuses to write when it cannot prove the connection is unchanged.
