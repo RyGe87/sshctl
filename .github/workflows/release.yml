@@ -81,7 +81,7 @@ jobs:
         run: |
           ditto -c -k --keepParent target/sshctl.app sshctl-macos-app.zip
           tar -C dist -czf sshctl-macos-universal.tar.gz sshctl sshctl-gui sshctl-tui
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: macos
           path: |
@@ -98,7 +98,7 @@ jobs:
             libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
       - run: cargo build --release --all-features
       - run: tar -C target/release -czf sshctl-linux-x86_64.tar.gz sshctl sshctl-gui sshctl-tui
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: linux
           path: sshctl-linux-x86_64.tar.gz
@@ -112,7 +112,7 @@ jobs:
           Compress-Archive
           -Path target/release/sshctl.exe, target/release/sshctl-gui.exe, target/release/sshctl-tui.exe
           -DestinationPath sshctl-windows-x86_64.zip
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: windows
           path: sshctl-windows-x86_64.zip
