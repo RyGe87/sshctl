@@ -2287,7 +2287,7 @@ fn render_modal(f: &mut Frame, app: &App) {
                         Line::from("keys         manage the private keys"),
                         Line::from("known_hosts  manage the accepted server keys"),
                         Line::default(),
-                        Line::from(dim("tab the keys · esc close")),
+                        Line::from(dim("tab → the keys · esc close")),
                     ],
                 )
             } else {
@@ -2311,7 +2311,7 @@ fn render_modal(f: &mut Frame, app: &App) {
                         Line::from("known_hosts  f fetch host · p pin · d remove"),
                         Line::default(),
                         Line::from(dim("             copy = your terminal's own selection")),
-                        Line::from(dim("tab the tabs · esc close")),
+                        Line::from(dim("tab → the tabs · esc close")),
                     ],
                 )
             };
