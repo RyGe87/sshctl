@@ -1015,7 +1015,15 @@ impl App {
                 }
             }
             KeyCode::Char('?') => self.modal = Modal::Help,
-            KeyCode::PageUp => self.findings_scroll += 5,
+            KeyCode::Up if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                self.findings_scroll = (self.findings_scroll + 1).min(self.findings_scroll_max());
+            }
+            KeyCode::Down if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                self.findings_scroll = self.findings_scroll.saturating_sub(1);
+            }
+            KeyCode::PageUp => {
+                self.findings_scroll = (self.findings_scroll + 5).min(self.findings_scroll_max());
+            }
             KeyCode::PageDown => self.findings_scroll = self.findings_scroll.saturating_sub(5),
             KeyCode::Char('J') => {
                 let bottom = self.detail_line_count().saturating_sub(1);
@@ -1024,6 +1032,16 @@ impl App {
             KeyCode::Char('K') => self.detail_scroll = self.detail_scroll.saturating_sub(1),
             _ => self.tab_key(&key),
         }
+    }
+
+    /// The furthest the findings can scroll back: the same filter the
+    /// renderer applies, so the clamp and the view agree.
+    fn findings_scroll_max(&self) -> usize {
+        self.findings
+            .iter()
+            .filter(|x| x.subject != "orphan")
+            .count()
+            .saturating_sub(1)
     }
 
     /// How many lines the detail pane currently holds, for clamping the
@@ -1560,8 +1578,12 @@ impl App {
     }
 }
 
-/// j/k and the arrow keys, as one notion.
+/// j/k and the arrow keys, as one notion. Only bare ones: a modifier means
+/// the key is talking to another pane.
 fn list_step(key: &KeyEvent) -> Option<isize> {
+    if key.modifiers != KeyModifiers::NONE {
+        return None;
+    }
     match key.code {
         KeyCode::Up | KeyCode::Char('k') => Some(-1),
         KeyCode::Down | KeyCode::Char('j') => Some(1),
@@ -2211,11 +2233,14 @@ fn render_findings(f: &mut Frame, app: &App, area: Rect) {
             ])
         })
         .collect();
-    let title = format!(
+    let mut title = format!(
         "FINDINGS ({}){}",
         shown.len(),
         if app.checking { " · checking…" } else { "" }
     );
+    if app.findings_scroll > 0 {
+        title.push_str(&format!(" · ↓ {} newer", app.findings_scroll));
+    }
     f.render_widget(
         Paragraph::new(Text::from(lines)).block(Block::bordered().title(title)),
         area,
@@ -2255,10 +2280,10 @@ fn render_modal(f: &mut Frame, app: &App) {
                 Line::from("1-4 or tab   switch tab"),
                 Line::from("j/k, arrows  move through lists"),
                 Line::from("shift-j/k    scroll the detail pane"),
+                Line::from("shift-↑/↓    scroll the findings (pgup/pgdn: five at a time)"),
                 Line::from("C            check everything again"),
                 Line::from("S            save — shows what changes, proves it with ssh -G"),
                 Line::from("R            reload from disk (asks first when unsaved)"),
-                Line::from("pgup/pgdn    scroll the findings"),
                 Line::from("q            quit"),
                 Line::default(),
                 Line::from(dim("Copy with your terminal's own selection; nothing here")),

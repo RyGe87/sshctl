@@ -739,9 +739,17 @@ pub struct KeyModifiers(u8);
 impl KeyModifiers {
     pub const NONE: KeyModifiers = KeyModifiers(0);
     pub const CONTROL: KeyModifiers = KeyModifiers(1);
+    pub const SHIFT: KeyModifiers = KeyModifiers(2);
 
     pub fn contains(self, other: KeyModifiers) -> bool {
         self.0 & other.0 == other.0
+    }
+}
+
+impl std::ops::BitOr for KeyModifiers {
+    type Output = KeyModifiers;
+    fn bitor(self, rhs: KeyModifiers) -> KeyModifiers {
+        KeyModifiers(self.0 | rhs.0)
     }
 }
 
@@ -835,6 +843,26 @@ fn parse_escape(buf: &[u8]) -> Parsed {
     }
 }
 
+/// The second CSI parameter carries the modifiers, xterm-style: the value
+/// minus one is a bitmask of shift (1), alt (2) and control (4).
+fn csi_modifiers(params: &[u8]) -> KeyModifiers {
+    let value: u8 = params
+        .split(|b| *b == b';')
+        .nth(1)
+        .and_then(|p| std::str::from_utf8(p).ok())
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(1);
+    let bits = value.saturating_sub(1);
+    let mut modifiers = KeyModifiers::NONE;
+    if bits & 1 != 0 {
+        modifiers = modifiers | KeyModifiers::SHIFT;
+    }
+    if bits & 4 != 0 {
+        modifiers = modifiers | KeyModifiers::CONTROL;
+    }
+    modifiers
+}
+
 fn csi_key(final_byte: u8, params: &[u8]) -> Option<KeyEvent> {
     let code = match final_byte {
         b'A' => KeyCode::Up,
@@ -861,7 +889,11 @@ fn csi_key(final_byte: u8, params: &[u8]) -> Option<KeyEvent> {
         }
         _ => return None,
     };
-    Some(key(code))
+    Some(KeyEvent {
+        code,
+        modifiers: csi_modifiers(params),
+        kind: KeyEventKind::Press,
+    })
 }
 
 fn parse_utf8(buf: &[u8]) -> Parsed {
@@ -1082,8 +1114,23 @@ mod tests {
     }
 
     #[test]
-    fn modified_arrows_still_move() {
-        assert_eq!(keys(b"\x1b[1;5A", true), vec![key(KeyCode::Up)]);
+    fn modified_arrows_carry_their_modifiers() {
+        assert_eq!(
+            keys(b"\x1b[1;5A", true),
+            vec![KeyEvent {
+                code: KeyCode::Up,
+                modifiers: KeyModifiers::CONTROL,
+                kind: KeyEventKind::Press,
+            }]
+        );
+        assert_eq!(
+            keys(b"\x1b[1;2B", true),
+            vec![KeyEvent {
+                code: KeyCode::Down,
+                modifiers: KeyModifiers::SHIFT,
+                kind: KeyEventKind::Press,
+            }]
+        );
     }
 
     /// The classic table beat crossterm's `38;5;N` slots in a side-by-side;
