@@ -2253,7 +2253,9 @@ fn render_modal(f: &mut Frame, app: &App) {
         Modal::None => {}
         Modal::Help => {
             let lines = vec![
-                Line::from("The first tab is for looking, the other three change things."),
+                Line::from("overview shows what ssh will really do, and where it comes from."),
+                Line::from("config edits your hosts, keys your keys, known_hosts the ledger."),
+                Line::from("Only overview cannot change anything."),
                 Line::default(),
                 Line::from("1-4 or tab   switch tab"),
                 Line::from("j/k, arrows  move through lists"),
