@@ -372,6 +372,8 @@ struct App {
 
     findings: Vec<Finding>,
     findings_scroll: usize,
+    /// How many lines of the detail pane are scrolled out at the top.
+    detail_scroll: usize,
     checking: bool,
     doctor_rx: Option<Receiver<Msg>>,
     proof_rx: Option<Receiver<proof::SaveJudgement>>,
@@ -410,6 +412,7 @@ impl App {
             entry_sel: 0,
             findings: Vec::new(),
             findings_scroll: 0,
+            detail_scroll: 0,
             checking: false,
             doctor_rx: None,
             proof_rx: None,
@@ -969,6 +972,16 @@ impl App {
             }
             return;
         }
+        // A new subject starts at the top: switching tab or selection
+        // rewinds the detail scroll. Except in the config field list, where
+        // j/k walks the detail itself.
+        let switches_subject = matches!(key.code, KeyCode::Tab)
+            || matches!(key.code, KeyCode::Char(c) if ('1'..='4').contains(&c))
+            || (list_step(&key).is_some()
+                && !(self.tab == Tab::Config && self.config_fields_focused));
+        if switches_subject {
+            self.detail_scroll = 0;
+        }
         match key.code {
             KeyCode::Char('q') => {
                 if self.dirty {
@@ -1004,7 +1017,23 @@ impl App {
             KeyCode::Char('?') => self.modal = Modal::Help,
             KeyCode::PageUp => self.findings_scroll += 5,
             KeyCode::PageDown => self.findings_scroll = self.findings_scroll.saturating_sub(5),
+            KeyCode::Char('J') => {
+                let bottom = self.detail_line_count().saturating_sub(1);
+                self.detail_scroll = (self.detail_scroll + 1).min(bottom);
+            }
+            KeyCode::Char('K') => self.detail_scroll = self.detail_scroll.saturating_sub(1),
             _ => self.tab_key(&key),
+        }
+    }
+
+    /// How many lines the detail pane currently holds, for clamping the
+    /// scroll to something that exists.
+    fn detail_line_count(&self) -> usize {
+        match self.tab {
+            Tab::Overview => overview_lines(self).len(),
+            Tab::Config => config_lines(self).len(),
+            Tab::Keys => key_lines(self).len(),
+            Tab::Known => known_lines(self).len(),
         }
     }
 
@@ -1817,12 +1846,18 @@ fn render_list(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn render_detail(f: &mut Frame, app: &App, area: Rect) {
-    let lines = match app.tab {
+    let mut lines = match app.tab {
         Tab::Overview => overview_lines(app),
         Tab::Config => config_lines(app),
         Tab::Keys => key_lines(app),
         Tab::Known => known_lines(app),
     };
+    // J/K scroll by whole lines; the clamp keeps the last one in view.
+    let skip = app.detail_scroll.min(lines.len().saturating_sub(1));
+    if skip > 0 {
+        lines.drain(..skip);
+        lines.insert(0, Line::from(dim(format!("↑ {skip} more"))));
+    }
     f.render_widget(
         Paragraph::new(Text::from(lines))
             .wrap(Wrap { trim: false })
@@ -2219,6 +2254,7 @@ fn render_modal(f: &mut Frame, app: &App) {
                 Line::default(),
                 Line::from("1-4 or tab   switch tab"),
                 Line::from("j/k, arrows  move through lists"),
+                Line::from("J/K          scroll the detail pane"),
                 Line::from("C            check everything again"),
                 Line::from("S            save — shows what changes, proves it with ssh -G"),
                 Line::from("R            reload from disk (asks first when unsaved)"),
