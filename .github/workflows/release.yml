@@ -67,7 +67,7 @@ jobs:
             --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$NOTARY_PASSWORD"
       - name: package
         run: tar -C dist -czf sshctl-macos-universal.tar.gz sshctl sshctl-tui
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: macos
           path: sshctl-macos-universal.tar.gz
@@ -78,7 +78,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: cargo build --release --all-features
       - run: tar -C target/release -czf sshctl-linux-x86_64.tar.gz sshctl sshctl-tui
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: linux
           path: sshctl-linux-x86_64.tar.gz
@@ -87,14 +87,14 @@ jobs:
     needs: [macos, linux]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           merge-multiple: true
       - run: sha256sum *.tar.gz > SHA256SUMS
       # Linux and Windows have no notary; verifiable provenance is the
       # honest equivalent. `gh attestation verify <file> --owner RyGe87`
       # proves an artifact was built from this repository by this workflow.
-      - uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: "*.tar.gz"
       # The gh CLI is part of the runner image: publishing a release needs no
